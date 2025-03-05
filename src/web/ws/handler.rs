@@ -12,7 +12,7 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::{RwLock, broadcast};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     cache::{self, DexEvent},
@@ -33,10 +33,17 @@ pub async fn ws_handler(
     State(WebAppContext {
         ws_connected,
         ws_broadcast,
+        ws_ticket,
         redis_client,
         ..
     }): State<WebAppContext>,
 ) -> impl IntoResponse {
+    // this can be used to auth
+    if ticket != ws_ticket {
+        error!("ws ticket is not valid: {ticket}");
+        return WebAppError::unauth("no auth websocket").into_response();
+    }
+
     let mut guard = ws_connected.write().await;
     if *guard {
         return WebAppError::other("already have connected client").into_response();
@@ -44,10 +51,6 @@ pub async fn ws_handler(
         *guard = true;
     }
     drop(guard);
-    // this can be used to auth
-    if ticket != "123" {
-        return WebAppError::unauth("no auth websocket").into_response();
-    }
 
     // finalize the upgrade process by returning upgrade callback.
     // we can customize the callback by sending additional info such as address.

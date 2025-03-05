@@ -12,6 +12,7 @@ use crate::config::AppConfig;
 #[derive(Clone)]
 pub struct WebAppContext {
     pub ws_broadcast: broadcast::Sender<Utf8Bytes>,
+    pub ws_ticket: String,
     pub ws_connected: Arc<RwLock<bool>>,
     pub db_pool: MySqlPool,
     pub redis_client: Arc<redis::Client>,
@@ -42,6 +43,7 @@ impl WebAppContext {
         Ok(Self {
             ws_connected: Arc::new(RwLock::new(false)),
             ws_broadcast: tx,
+            ws_ticket: config.ws_ticket.clone(),
             db_pool,
             redis_client,
             sol_rpc_client,
