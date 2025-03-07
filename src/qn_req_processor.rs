@@ -11,7 +11,8 @@ use serde_with::{DisplayFromStr, serde_as};
 use tracing::info;
 
 use crate::{
-    cache::{self, DexEvent, DexPoolRecord, RedisCacheRecord, TradeRecord},
+    cache::{self, DexEvent, DexPoolCreatedRecord, DexPoolRecord, RedisCacheRecord, TradeRecord},
+    common::TxBaseMetaInfo,
     meteora::{METEORA_DLMM_PROGRAM_ID, event::MeteoraDlmmSwapEvent},
     pumpfun::{PUMPFUN_PROGRAM_ID, event::PumpFunEvents},
     raydium::{RAYDIUM_AMM_PROGRAM_ID, event::RayLogs},
@@ -105,17 +106,31 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                 }
                 let invocation = invocation.unwrap();
                 let accounts = &invocation.instruction.accounts;
+
+                let tx_meta = TxBaseMetaInfo {
+                    blk_ts,
+                    slot,
+                    txid: txid.clone(),
+                    idx: invocation.instruction.index,
+                };
+
                 if invocation.program_id == RAYDIUM_AMM_PROGRAM_ID.to_string() {
                     match RayLogs::decode(&log.replace("Program log: ray_log: ", "")) {
                         Ok(RayLogs::Init(evt)) => {
                             // example tx: 5SPKmhBHCBphyVietx4yu3FyJ7odwLDqv5UD2sGCJpGfQu8oiVtMxiKtCvecS91G3th4nbiZz1APa8TMLncbbD6Z
-                            let pool_record = DexPoolRecord::from_raydium_init_log(evt, accounts)?;
+                            let pool_created_record = DexPoolCreatedRecord::from_raydium_init_log(
+                                tx_meta.clone(),
+                                evt,
+                                accounts,
+                            )?;
+                            let pool_record: DexPoolRecord = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
                             pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
                             drop(redis_conn);
-                            if pool_record.is_wsol_pool() {
-                                all_events.push(DexEvent::PoolCreated(pool_record));
+
+                            if pool_created_record.is_wsol_pool() {
+                                all_events.push(DexEvent::PoolCreated(pool_created_record));
                             }
                         }
                         Ok(RayLogs::SwapBaseIn(evt)) => {
@@ -153,17 +168,17 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                 } else if invocation.program_id == PUMPFUN_PROGRAM_ID.to_string() {
                     match PumpFunEvents::from_cpi_log(&log.replace("pumpfun cpi log: ", "")) {
                         Ok(PumpFunEvents::Create(evt)) => {
-                            let pool_record = DexPoolRecord::from_pumpfun_curve_and_mint(
-                                evt.bonding_curve,
-                                evt.mint,
-                                false,
-                            );
+                            let pool_created_record =
+                                DexPoolCreatedRecord::from_pumpfun_create_log(tx_meta.clone(), evt);
+
+                            let pool_record = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
                             pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
                             drop(redis_conn);
-                            if pool_record.is_wsol_pool() {
-                                all_events.push(DexEvent::PoolCreated(pool_record));
+
+                            if pool_created_record.is_wsol_pool() {
+                                all_events.push(DexEvent::PoolCreated(pool_created_record));
                             }
                         }
                         Ok(PumpFunEvents::Trade(evt)) => {

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+alloy-core = "0.8.22"
 anyhow = "1.0.96"
 axum = { version = "0.8.1", features = ["macros", "ws"] }
 axum-extra = { version = "0.10.0", features = ["typed-header"] }

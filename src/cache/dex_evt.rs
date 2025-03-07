@@ -3,13 +3,13 @@ use redis::aio::MultiplexedConnection;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::{DexPoolRecord, TradeRecord};
+use super::{DexPoolCreatedRecord, TradeRecord};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum DexEvent {
     Trade(TradeRecord),
-    PoolCreated(DexPoolRecord),
+    PoolCreated(DexPoolCreatedRecord),
 }
 
 const DEX_EVENT_LIST_KEY: &str = "list:dex_events";
@@ -79,7 +79,7 @@ mod test {
     use solana_sdk::pubkey::Pubkey;
 
     use crate::{
-        cache::DexPoolRecord,
+        cache::DexPoolCreatedRecord,
         common::{Dex, WSOL_MINT},
         pumpfun::PUMPFUN_PROGRAM_ID,
         raydium::RAYDIUM_AMM_PROGRAM_ID,
@@ -110,14 +110,18 @@ mod test {
         let v = serde_json::to_value(&evt).unwrap();
         assert_eq!(v.get("kind").and_then(|it| it.as_str()), Some("Trade"));
 
-        let evt = DexEvent::PoolCreated(DexPoolRecord {
+        let evt = DexEvent::PoolCreated(DexPoolCreatedRecord {
+            blk_ts: Utc::now(),
+            slot: 1,
+            txid: "txid123".to_string(),
+            idx: 6,
+            creator: RAYDIUM_AMM_PROGRAM_ID,
             addr: WSOL_MINT,
             dex: Dex::Pumpfun,
             mint_a: WSOL_MINT,
             mint_b: RAYDIUM_AMM_PROGRAM_ID,
             decimals_a: 9,
             decimals_b: 6,
-            is_complete: false,
         });
         println!("pool created evt: {}", serde_json::to_string(&evt).unwrap());
         let v = serde_json::to_value(&evt).unwrap();

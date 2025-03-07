@@ -1,18 +1,124 @@
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc, serde::ts_seconds};
 use redis::aio::MultiplexedConnection;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{
-    common::{Dex, WSOL_MINT},
+    common::{Dex, TxBaseMetaInfo, WSOL_MINT},
+    pumpfun::event::CreateEvent,
     qn_req_processor::IxAccount,
     raydium::event::InitLog,
 };
 
 use super::RedisCacheRecord;
+
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DexPoolCreatedRecord {
+    #[serde(with = "ts_seconds")]
+    pub blk_ts: DateTime<Utc>,
+    pub slot: u64,
+    pub txid: String,
+    pub idx: u64,
+    pub creator: Pubkey,
+    #[serde_as(as = "DisplayFromStr")]
+    pub addr: Pubkey,
+    pub dex: Dex,
+    #[serde_as(as = "DisplayFromStr")]
+    pub mint_a: Pubkey,
+    #[serde_as(as = "DisplayFromStr")]
+    pub mint_b: Pubkey,
+    pub decimals_a: u8,
+    pub decimals_b: u8,
+}
+
+impl DexPoolCreatedRecord {
+    pub fn is_wsol_pool(&self) -> bool {
+        self.mint_a == WSOL_MINT || self.mint_b == WSOL_MINT
+    }
+
+    pub fn as_pool_record(&self) -> DexPoolRecord {
+        DexPoolRecord {
+            addr: self.addr,
+            dex: self.dex,
+            is_complete: false,
+            mint_a: self.mint_a,
+            mint_b: self.mint_b,
+            decimals_a: self.decimals_a,
+            decimals_b: self.decimals_b,
+        }
+    }
+
+    pub fn from_pumpfun_create_log(tx_meta: TxBaseMetaInfo, log: CreateEvent) -> Self {
+        let TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        } = tx_meta;
+
+        DexPoolCreatedRecord {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            addr: log.bonding_curve,
+            creator: log.user,
+            dex: Dex::Pumpfun,
+            mint_a: log.mint,
+            mint_b: WSOL_MINT,
+            decimals_a: 6,
+            decimals_b: 9,
+        }
+    }
+
+    pub fn from_raydium_init_log(
+        tx_meta: TxBaseMetaInfo,
+        log: InitLog,
+        accounts: &[IxAccount],
+    ) -> Result<Self> {
+        let amm_acc = accounts
+            .get(4)
+            .ok_or_else(|| anyhow!("need amm addr in init raydium instruction accounts"))?;
+        let amm_pubkey = Pubkey::from_str(&amm_acc.pubkey)?;
+        let coin_mint_acc = accounts
+            .get(8)
+            .ok_or_else(|| anyhow!("need coin mint in init raydium instruction accounts"))?;
+        let coin_mint_pubkey = Pubkey::from_str(&coin_mint_acc.pubkey)?;
+        let pc_mint_acc = accounts
+            .get(9)
+            .ok_or_else(|| anyhow!("need pc mint in init raydium instruction accounts"))?;
+        let pc_mint_pubkey = Pubkey::from_str(&pc_mint_acc.pubkey)?;
+        let creator_acc = accounts
+            .get(17)
+            .ok_or_else(|| anyhow!("need pool creator in init raydium instruction accounts"))?;
+        let creator_pubkey = Pubkey::from_str(&creator_acc.pubkey)?;
+
+        let TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        } = tx_meta;
+        Ok(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            addr: amm_pubkey,
+            creator: creator_pubkey,
+            dex: Dex::RaydiumAmm,
+            mint_a: coin_mint_pubkey,
+            mint_b: pc_mint_pubkey,
+            decimals_a: log.coin_decimals,
+            decimals_b: log.pc_decimals,
+        })
+    }
+}
 
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,31 +227,6 @@ impl DexPoolRecord {
             cached_pool = Some(pool_record);
         }
         Ok(cached_pool.unwrap())
-    }
-
-    pub fn from_raydium_init_log(log: InitLog, accounts: &[IxAccount]) -> Result<Self> {
-        let amm_acc = accounts
-            .get(4)
-            .ok_or_else(|| anyhow!("need amm addr in init raydium instruction accounts"))?;
-        let amm_pubkey = Pubkey::from_str(&amm_acc.pubkey)?;
-        let coin_mint_acc = accounts
-            .get(8)
-            .ok_or_else(|| anyhow!("need coin mint in init raydium instruction accounts"))?;
-        let coin_mint_pubkey = Pubkey::from_str(&coin_mint_acc.pubkey)?;
-        let pc_mint_acc = accounts
-            .get(9)
-            .ok_or_else(|| anyhow!("need pc mint in init raydium instruction accounts"))?;
-        let pc_mint_pubkey = Pubkey::from_str(&pc_mint_acc.pubkey)?;
-
-        Ok(DexPoolRecord {
-            addr: amm_pubkey,
-            dex: Dex::RaydiumAmm,
-            is_complete: false,
-            mint_a: coin_mint_pubkey,
-            mint_b: pc_mint_pubkey,
-            decimals_a: log.coin_decimals,
-            decimals_b: log.pc_decimals,
-        })
     }
 
     pub fn from_pumpfun_curve_and_mint(curve: Pubkey, mint: Pubkey, is_complete: bool) -> Self {

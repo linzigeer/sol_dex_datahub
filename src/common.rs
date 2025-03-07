@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
@@ -5,11 +6,19 @@ use strum::{Display, EnumString};
 
 pub const WSOL_MINT: Pubkey = pubkey!("So11111111111111111111111111111111111111112");
 
-#[derive(Debug, Serialize, Deserialize, Display, EnumString)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Display, EnumString)]
 pub enum Dex {
     RaydiumAmm,
     Pumpfun,
     MeteoraDlmm,
+}
+
+#[derive(Debug, Clone)]
+pub struct TxBaseMetaInfo {
+    pub blk_ts: DateTime<Utc>,
+    pub slot: u64,
+    pub txid: String,
+    pub idx: u64,
 }
 
 pub mod utils {
