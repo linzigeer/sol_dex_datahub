@@ -2,7 +2,6 @@ mod context;
 pub mod controller;
 mod error;
 pub mod extractor;
-pub mod ws;
 
 use std::net::SocketAddr;
 
@@ -13,6 +12,7 @@ pub use error::*;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 use tokio::net::TcpListener;
@@ -23,9 +23,9 @@ use tracing::info;
 pub async fn start(context: WebAppContext, listen_on: &str) -> Result<()> {
     let app = Router::new()
         .route("/", get(home::index))
-        .route("/ws", axum::routing::any(ws::ws_handler))
         .route("/metrics", get(metrics::check_health))
         .route("/sol_dex_stream", post(qn_stream::sol_dex_stream))
+        .layer(DefaultBodyLimit::max(1024 * 1024 * 300))
         .layer(TraceLayer::new_for_http())
         .layer(RequestDecompressionLayer::new())
         .with_state(context);

@@ -1,12 +1,15 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use sol_dex_data_hub::{
     config::AppConfig,
+    qn_req_processor,
     web::{self, WebAppContext},
+    webhook::DexEvtWebhook,
 };
 use tokio::fs;
+use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, Registry, fmt::Layer, layer::SubscriberExt};
 
 #[derive(Debug, Parser)]
@@ -33,6 +36,39 @@ async fn main() -> Result<()> {
         .map_err(|err| anyhow!("parse config json file error: {err}"))?;
 
     let context = WebAppContext::init(&config).await?;
+
+    let redis_client = context.redis_client.clone();
+    // process quick node stream
+    tokio::spawn(async move {
+        loop {
+            let redis_client = redis_client.clone();
+            match qn_req_processor::start(redis_client).await {
+                Ok(_) => info!("qn request processor successed"),
+                Err(err) => error!("qn reqwest processor error: {err}"),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
+    let redis_client = context.redis_client.clone();
+    let webhook_endpoint = config.webhook_enpoint.clone();
+    let http_client = Arc::new(reqwest::ClientBuilder::new().build()?);
+    tokio::spawn(async move {
+        loop {
+            let redis_client = redis_client.clone();
+            let webhook = DexEvtWebhook {
+                redis_client,
+                http_client: http_client.clone(),
+                endpoint: webhook_endpoint.clone(),
+            };
+            match webhook.start().await {
+                Ok(_) => info!("webhook processor successed"),
+                Err(err) => error!("webhook processor error: {err}"),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
     web::start(context, &config.listen_on).await?;
 
     Ok(())

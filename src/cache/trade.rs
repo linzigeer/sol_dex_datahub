@@ -10,10 +10,9 @@ use crate::{
     common::{Dex, WSOL_MINT, utils},
     meteora::event::MeteoraDlmmSwapEvent,
     pumpfun::event::TradeEvent,
+    qn_req_processor::IxAccount,
     raydium::event::{SwapBaseInLog, SwapBaseOutLog},
-    web::controller::qn_stream::IxAccount,
 };
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 
 #[serde_as]
@@ -156,7 +155,6 @@ impl TradeRecord {
         log: SwapBaseInLog,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,
-        rpc_client: &RpcClient,
     ) -> Result<Option<Self>> {
         let pool_acc = accounts
             .get(1)
@@ -164,7 +162,8 @@ impl TradeRecord {
         let amm_pubkey = Pubkey::from_str(&pool_acc.pubkey)?;
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
-            DexPoolRecord::from_raydim_amm_pubkey(amm_pubkey, &mut redis_conn, rpc_client).await?;
+            DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
+                .await?;
         cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
         drop(redis_conn);
 
@@ -274,7 +273,6 @@ impl TradeRecord {
         log: SwapBaseOutLog,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,
-        rpc_client: &RpcClient,
     ) -> Result<Option<Self>> {
         let pool_acc = accounts
             .get(1)
@@ -282,7 +280,8 @@ impl TradeRecord {
         let amm_pubkey = Pubkey::from_str(&pool_acc.pubkey)?;
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
-            DexPoolRecord::from_raydim_amm_pubkey(amm_pubkey, &mut redis_conn, rpc_client).await?;
+            DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
+                .await?;
         cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
         drop(redis_conn);
 

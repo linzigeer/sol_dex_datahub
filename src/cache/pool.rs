@@ -4,13 +4,12 @@ use anyhow::{Result, anyhow};
 use redis::aio::MultiplexedConnection;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{
     common::{Dex, WSOL_MINT},
-    raydium::{accounts::AmmInfo, event::InitLog},
-    web::controller::qn_stream::IxAccount,
+    qn_req_processor::IxAccount,
+    raydium::event::InitLog,
 };
 
 use super::RedisCacheRecord;
@@ -77,23 +76,46 @@ impl DexPoolRecord {
         Ok(cached_pool.unwrap())
     }
 
-    pub async fn from_raydim_amm_pubkey(
+    pub async fn from_raydim_amm_trade_accounts(
         amm_pubkey: Pubkey,
+        accounts: &[IxAccount],
         redis_conn: &mut MultiplexedConnection,
-        rpc_client: &RpcClient,
     ) -> Result<Self> {
         let key = format!("{}{}", DexPoolRecord::prefix(), amm_pubkey);
         let mut cached_pool = DexPoolRecord::from_redis(redis_conn, &key).await?;
         if cached_pool.is_none() {
-            let amm_info = AmmInfo::from_rpc(rpc_client, &amm_pubkey.to_string()).await?;
+            let mut coin_token_vault_idx = 4;
+            let mut pc_token_vault_idx = 5;
+            if accounts.len() == 18 {
+                coin_token_vault_idx = 5;
+                pc_token_vault_idx = 6;
+            }
+
+            let coin_token_vault = accounts
+                .get(coin_token_vault_idx)
+                .ok_or_else(|| anyhow!("need coin token vault in raydium amm swap base in log"))?;
+            let coin_token_amt = coin_token_vault.post_amt.token.clone().ok_or_else(|| {
+                anyhow!("coin token should have balance in raydium amm base in swap")
+            })?;
+            let mint_a = Pubkey::from_str(&coin_token_amt.mint)?;
+            let decimals_a = coin_token_amt.decimals;
+            let pc_token_vault = accounts
+                .get(pc_token_vault_idx)
+                .ok_or_else(|| anyhow!("need pc token vault in raydium amm swap base in log"))?;
+            let pc_token_amt = pc_token_vault.post_amt.token.clone().ok_or_else(|| {
+                anyhow!("pc token should have balance in raydium amm base in swap log")
+            })?;
+            let mint_b = Pubkey::from_str(&pc_token_amt.mint)?;
+            let decimals_b = pc_token_amt.decimals;
+
             let pool_record = Self {
                 addr: amm_pubkey,
                 dex: Dex::RaydiumAmm,
                 is_complete: false,
-                mint_a: amm_info.coin_vault_mint,
-                mint_b: amm_info.pc_vault_mint,
-                decimals_a: amm_info.coin_decimals as u8,
-                decimals_b: amm_info.pc_decimals as u8,
+                mint_a,
+                mint_b,
+                decimals_a,
+                decimals_b,
             };
             pool_record.save_ex(redis_conn, 3600 * 12).await?;
             cached_pool = Some(pool_record);

@@ -13,15 +13,15 @@ pub enum DexEvent {
 }
 
 const DEX_EVENT_LIST_KEY: &str = "list:dex_events";
-const MAX_EVENT_LEN: u64 = 200_000;
+const MAX_EVENT_LEN: u64 = 50_000;
 pub async fn rpush_dex_evts(conn: &mut MultiplexedConnection, events: &[DexEvent]) -> Result<()> {
     let q_len: u64 = redis::cmd("llen")
         .arg(DEX_EVENT_LIST_KEY)
         .query_async(conn)
         .await?;
-    if q_len > MAX_EVENT_LEN {
-        warn!("trade queue larger than 200000");
-        return Err(anyhow!("trade queue larger than 200000"));
+    if q_len >= MAX_EVENT_LEN {
+        warn!("trade queue larger than {MAX_EVENT_LEN}");
+        return Err(anyhow!("trade queue larger than {MAX_EVENT_LEN}"));
     }
 
     // redis rpush
@@ -36,7 +36,7 @@ pub async fn rpush_dex_evts(conn: &mut MultiplexedConnection, events: &[DexEvent
     Ok(())
 }
 
-pub async fn take_dex_evts(conn: &mut MultiplexedConnection) -> Result<Vec<DexEvent>> {
+pub async fn lrange_dex_evts(conn: &mut MultiplexedConnection) -> Result<Vec<DexEvent>> {
     let llen: u64 = redis::cmd("llen")
         .arg(DEX_EVENT_LIST_KEY)
         .query_async(conn)
@@ -44,6 +44,7 @@ pub async fn take_dex_evts(conn: &mut MultiplexedConnection) -> Result<Vec<DexEv
     if llen == 0 {
         return Ok(vec![]);
     }
+
     let records: Vec<String> = redis::cmd("lrange")
         .arg(DEX_EVENT_LIST_KEY)
         .arg(0)
@@ -59,14 +60,17 @@ pub async fn take_dex_evts(conn: &mut MultiplexedConnection) -> Result<Vec<DexEv
         evts.push(evt);
     }
 
+    Ok(evts)
+}
+
+pub async fn ltrim_dex_evts(conn: &mut MultiplexedConnection, len: usize) -> Result<()> {
     let _: () = redis::cmd("ltrim")
         .arg(DEX_EVENT_LIST_KEY)
-        .arg(llen)
+        .arg(len)
         .arg(-1)
         .query_async(conn)
         .await?;
-
-    Ok(evts)
+    Ok(())
 }
 
 #[cfg(test)]
