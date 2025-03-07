@@ -82,7 +82,7 @@ impl TradeRecord {
         let token_y_vault = accounts
             .get(3)
             .ok_or_else(|| anyhow!("need token y value in meteora dlmm swap log"))?;
-        let pool_token_y_amt = token_x_vault.post_amt.token.clone().ok_or_else(|| {
+        let pool_token_y_amt = token_y_vault.post_amt.token.clone().ok_or_else(|| {
             anyhow!(
                 "meteora dlmm token y vault {} should have balance",
                 token_y_vault.pubkey
