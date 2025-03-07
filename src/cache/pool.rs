@@ -24,6 +24,7 @@ pub struct DexPoolCreatedRecord {
     pub slot: u64,
     pub txid: String,
     pub idx: u64,
+    #[serde_as(as = "DisplayFromStr")]
     pub creator: Pubkey,
     #[serde_as(as = "DisplayFromStr")]
     pub addr: Pubkey,
