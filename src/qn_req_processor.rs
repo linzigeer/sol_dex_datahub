@@ -11,9 +11,12 @@ use serde_with::{DisplayFromStr, serde_as};
 use tracing::info;
 
 use crate::{
-    cache::{self, DexEvent, DexPoolCreatedRecord, DexPoolRecord, RedisCacheRecord, TradeRecord},
+    cache::{
+        self, DexEvent, DexPoolCreatedRecord, DexPoolRecord, PumpfunCompleteRecord,
+        RedisCacheRecord, TradeRecord,
+    },
     common::TxBaseMetaInfo,
-    meteora::{METEORA_DLMM_PROGRAM_ID, event::MeteoraDlmmSwapEvent},
+    meteora::{METEORA_DLMM_PROGRAM_ID, event::MeteoraDlmmEvents},
     pumpfun::{PUMPFUN_PROGRAM_ID, event::PumpFunEvents},
     raydium::{RAYDIUM_AMM_PROGRAM_ID, event::RayLogs},
 };
@@ -67,21 +70,51 @@ pub struct Instruction {
     pub index: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QnStreamMetadata {
+    pub batch_end_range: u64,
+    pub batch_start_range: u64,
+    pub dataset: String,
+    // -1 means never end
+    pub end_range: i128,
+    pub keep_distance_from_tip: u64,
+    pub network: String,
+    pub start_range: u64,
+    pub stream_id: String,
+    pub stream_name: String,
+    pub stream_region: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QnSolDexDatahubWebhookReq {
+    pub txs: Vec<Tx>,
+    pub metadata: QnStreamMetadata,
+}
+
 pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
     info!("start qn request processor........");
     loop {
         let start = Instant::now();
         let mut conn = redis_client.get_multiplexed_async_connection().await?;
         let reqs = cache::take_qn_requests(&mut conn).await?;
-        let txs: Vec<_> = futures::stream::iter(reqs)
-            .map(|it| async move { serde_json::from_str::<Vec<Tx>>(&it) })
+        let webhook_reqs: Vec<_> = futures::stream::iter(reqs)
+            .map(|it| async move { serde_json::from_str::<QnSolDexDatahubWebhookReq>(&it) })
             .buffered(5)
             .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .flatten()
-            .collect();
+            .await?;
 
+        let (metas, txs): (Vec<_>, Vec<_>) = webhook_reqs
+            .into_iter()
+            .map(|it| (it.metadata, it.txs))
+            .unzip();
+        for meta in metas {
+            info!(
+                "process slot range: [{} - {}] {} transactions from stream region: {}",
+                meta.batch_start_range, meta.batch_end_range, meta.network, meta.stream_region
+            );
+        }
+
+        let txs: Vec<_> = txs.into_iter().flatten().collect();
         if txs.is_empty() {
             tokio::time::sleep(Duration::from_millis(300)).await;
             continue;
@@ -202,19 +235,38 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                                 evt.mint,
                                 true,
                             );
-                            info!("pumpfun complete,tx: {txid}, {:?}", pool_record);
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
                             pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
                             drop(redis_conn);
+
+                            let complete_evt = PumpfunCompleteRecord::new(tx_meta.clone(), &evt);
+                            all_events.push(DexEvent::PumpfunComplete(complete_evt))
                         }
                         _ => continue,
                     }
                 } else if invocation.program_id == METEORA_DLMM_PROGRAM_ID.to_string() {
-                    match MeteoraDlmmSwapEvent::from_cpi_log(
+                    match MeteoraDlmmEvents::from_cpi_log(
                         &log.replace("meteora dlmm cpi log: ", ""),
                     ) {
-                        Ok(evt) => {
+                        Ok(MeteoraDlmmEvents::LbPairCreate(evt)) => {
+                            let pool_created_record =
+                                DexPoolCreatedRecord::from_meteora_dlmm_lp_create_log(
+                                    tx_meta.clone(),
+                                    evt,
+                                    accounts,
+                                )?;
+                            let pool_record: DexPoolRecord = pool_created_record.as_pool_record();
+                            let mut redis_conn =
+                                redis_client.get_multiplexed_async_connection().await?;
+                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            drop(redis_conn);
+
+                            if pool_created_record.is_wsol_pool() {
+                                all_events.push(DexEvent::PoolCreated(pool_created_record));
+                            }
+                        }
+                        Ok(MeteoraDlmmEvents::Swap(evt)) => {
                             let trade = TradeRecord::from_meteora_dlmm_swap(
                                 blk_ts,
                                 slot,

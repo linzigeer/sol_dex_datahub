@@ -3,13 +3,14 @@ use redis::aio::MultiplexedConnection;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::{DexPoolCreatedRecord, TradeRecord};
+use super::{DexPoolCreatedRecord, PumpfunCompleteRecord, TradeRecord};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum DexEvent {
     Trade(TradeRecord),
     PoolCreated(DexPoolCreatedRecord),
+    PumpfunComplete(PumpfunCompleteRecord),
 }
 
 const DEX_EVENT_LIST_KEY: &str = "list:dex_events";

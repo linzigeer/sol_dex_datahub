@@ -9,6 +9,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{
     common::{Dex, TxBaseMetaInfo, WSOL_MINT},
+    meteora::event::MeteoraLbPairCreateEvent,
     pumpfun::event::CreateEvent,
     qn_req_processor::IxAccount,
     raydium::event::InitLog,
@@ -117,6 +118,63 @@ impl DexPoolCreatedRecord {
             mint_b: pc_mint_pubkey,
             decimals_a: log.coin_decimals,
             decimals_b: log.pc_decimals,
+        })
+    }
+
+    pub fn from_meteora_dlmm_lp_create_log(
+        tx_meta: TxBaseMetaInfo,
+        log: MeteoraLbPairCreateEvent,
+        accounts: &[IxAccount],
+    ) -> Result<Self> {
+        let TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        } = tx_meta;
+
+        let MeteoraLbPairCreateEvent {
+            lb_pair,
+            token_x,
+            token_y,
+            ..
+        } = log;
+
+        let x_vault_acc = accounts.get(4).ok_or_else(|| {
+            anyhow!("need x vault in meteora dlmm create lb pair instruction accounts")
+        })?;
+        let x_valut_token_amt = x_vault_acc
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("meteora dlmm x valult should have token amt"))?;
+
+        let y_vault_acc = accounts.get(5).ok_or_else(|| {
+            anyhow!("need y vault in meteora dlmm create lb pair instruction accounts")
+        })?;
+        let y_valut_token_amt = y_vault_acc
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("meteora dlmm y valult should have token amt"))?;
+
+        let creator_acc = accounts.get(8).ok_or_else(|| {
+            anyhow!("need pool creator in meteora dlmm create lb pair instruction accounts")
+        })?;
+        let creator_pubkey = Pubkey::from_str(&creator_acc.pubkey)?;
+
+        Ok(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            addr: lb_pair,
+            creator: creator_pubkey,
+            dex: Dex::MeteoraDlmm,
+            mint_a: token_x,
+            mint_b: token_y,
+            decimals_a: x_valut_token_amt.decimals,
+            decimals_b: y_valut_token_amt.decimals,
         })
     }
 }

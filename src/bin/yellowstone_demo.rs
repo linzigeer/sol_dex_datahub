@@ -47,12 +47,12 @@ async fn main() -> anyhow::Result<()> {
         async move {
             subscribe_tx
                 .send(SubscribeRequest {
-                    // slots: maplit::hashmap! {
-                    //     "".to_owned() => SubscribeRequestFilterSlots {
-                    //         filter_by_commitment: Some(true),
-                    //         interslot_updates: Some(false)
-                    //     }
-                    // },
+                    slots: maplit::hashmap! {
+                        "".to_owned() => SubscribeRequestFilterSlots {
+                            filter_by_commitment: Some(true),
+                            interslot_updates: Some(false)
+                        }
+                    },
                     blocks: maplit::hashmap! {
                         "".to_owned() => SubscribeRequestFilterBlocks {
                             account_include:vec![

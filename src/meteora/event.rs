@@ -4,7 +4,6 @@ use solana_sdk::pubkey::Pubkey;
 
 #[derive(Debug, Clone, Copy, BorshDeserialize)]
 pub struct MeteoraDlmmSwapEvent {
-    pub evt_id: u64,
     // Liquidity pool pair
     pub lb_pair: Pubkey,
     // Address initiated the swap
@@ -29,23 +28,61 @@ pub struct MeteoraDlmmSwapEvent {
     pub host_fee: u64,
 }
 
-impl MeteoraDlmmSwapEvent {
+#[derive(Debug, Clone, Copy, BorshDeserialize)]
+pub struct MeteoraLbPairCreateEvent {
+    // Liquidity pool pair
+    pub lb_pair: Pubkey,
+    // Bin step
+    pub bin_step: u16,
+    // Address of token X
+    pub token_x: Pubkey,
+    // Address of token Y
+    pub token_y: Pubkey,
+}
+
+#[derive(Debug)]
+pub enum MeteoraDlmmEvents {
+    Swap(MeteoraDlmmSwapEvent),
+    LbPairCreate(MeteoraLbPairCreateEvent),
+}
+
+impl MeteoraDlmmEvents {
     pub fn from_cpi_log(log: &str) -> Result<Self> {
         let bytes = bs58::decode(log).into_vec()?;
-        let evt: MeteoraDlmmSwapEvent = borsh::from_slice(&bytes[8..])?;
-        Ok(evt)
+        let bytes = &bytes[8..];
+
+        let result = match &bytes[..8] {
+            [81, 108, 227, 190, 205, 208, 10, 196] => {
+                let evt: MeteoraDlmmSwapEvent = borsh::from_slice(&bytes[8..])?;
+                Self::Swap(evt)
+            }
+            [185, 74, 252, 125, 27, 215, 188, 111] => {
+                let evt: MeteoraLbPairCreateEvent = borsh::from_slice(&bytes[8..])?;
+                Self::LbPairCreate(evt)
+            }
+            _ => anyhow::bail!("log is not recognized as meteora dlmm log: {log}"),
+        };
+
+        Ok(result)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MeteoraDlmmSwapEvent;
+    use super::*;
 
     #[test]
     fn test_decode_swap_evt() {
         let evt_data = "yCGxBopjnVNQkNP5usq1PpLuVb2NpVsU6W7oHk1uLCBqSbdXeht3CBJqM9Tqo5eD8dWs3PcBsosJs4TvgcKDL59evdyxbk1yUH1Wjk81pBm4JBZyfTH9W4PNhbdf8ueHGDkFqhaW75JUGhrwv3T8GbkzpnbdFCFKdcT1gYQnH89AVpBPWqGU63e6nFFRBtTWASyZwM";
-
-        let evt = MeteoraDlmmSwapEvent::from_cpi_log(evt_data).unwrap();
+        let evt = MeteoraDlmmEvents::from_cpi_log(evt_data).unwrap();
         println!("meteora dlmm swap event: {evt:#?}");
+    }
+
+    #[test]
+    fn test_decode_lbpair_created_evt() {
+        let evt_data = "FPwodQBxG1zfFUeFeUF2VDpU7KqWxHbyuYpoFzxe5t5Qaah8zV77xFwXU3wqndwXXp9N83wCyPtQMc9zS1xK4ithJuMsrt1sd9fe8MXr7fvPwciaSDTA2ZSPr49S41rui4adqcDb6a14uQcEz6vgJg9tpGeU";
+
+        let evt = MeteoraDlmmEvents::from_cpi_log(evt_data).unwrap();
+        println!("meteora dlmm lb pair created event: {evt:#?}");
     }
 }

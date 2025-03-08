@@ -5,7 +5,7 @@ use reqwest::header;
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::cache::{self, DexPoolCreatedRecord, TradeRecord};
+use crate::cache::{self, DexPoolCreatedRecord, PumpfunCompleteRecord, TradeRecord};
 
 pub struct DexEvtWebhook {
     pub redis_client: Arc<redis::Client>,
@@ -15,6 +15,7 @@ pub struct DexEvtWebhook {
 
 #[derive(Debug, Serialize)]
 pub struct WebhookReq {
+    pub pumpfun_complete_evts: Vec<PumpfunCompleteRecord>,
     pub pool_created_evts: Vec<DexPoolCreatedRecord>,
     pub trade_evts: Vec<TradeRecord>,
 }
@@ -35,6 +36,7 @@ impl DexEvtWebhook {
 
             let mut pool_created_evts = vec![];
             let mut trade_evts = vec![];
+            let mut pumpfun_complete_evts = vec![];
 
             for evt in events {
                 match evt {
@@ -42,10 +44,15 @@ impl DexEvtWebhook {
                     cache::DexEvent::PoolCreated(dex_pool_record) => {
                         pool_created_evts.push(dex_pool_record)
                     }
+                    cache::DexEvent::PumpfunComplete(pump_complete_record) => {
+                        info!("pumpfun complete, {:?}", pump_complete_record);
+                        pumpfun_complete_evts.push(pump_complete_record);
+                    }
                 }
             }
 
             let req = WebhookReq {
+                pumpfun_complete_evts,
                 pool_created_evts,
                 trade_evts,
             };

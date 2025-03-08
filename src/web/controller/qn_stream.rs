@@ -20,7 +20,7 @@ pub async fn sol_dex_stream(
     }
     let body_start = &req_body[0..body_start_len];
     debug!("request body is start with: {}", body_start);
-    if body_start.contains("blkTs") {
+    if body_start.contains("metadata") {
         let mut conn = redis_client.get_multiplexed_async_connection().await?;
         cache::rpush_qn_request(&mut conn, req_body).await?;
     }
