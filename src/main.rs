@@ -52,7 +52,12 @@ async fn main() -> Result<()> {
 
     let redis_client = context.redis_client.clone();
     let webhook_endpoint = config.webhook_enpoint.clone();
-    let http_client = Arc::new(reqwest::ClientBuilder::new().build()?);
+    let http_client = Arc::new(
+        reqwest::ClientBuilder::new()
+            .connect_timeout(Duration::from_millis(200))
+            .timeout(Duration::from_secs(1))
+            .build()?,
+    );
     tokio::spawn(async move {
         loop {
             let redis_client = redis_client.clone();

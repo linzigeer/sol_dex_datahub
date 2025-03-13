@@ -1,7 +1,7 @@
 #![allow(unused)]
 use anyhow::Result;
-use base64::Engine;
 use borsh::BorshDeserialize;
+use solana_sdk::borsh1;
 use solana_sdk::pubkey::Pubkey;
 use tracing::debug;
 
@@ -75,19 +75,19 @@ impl PumpFunEvents {
 
         let result = match &bytes[..8] {
             [189, 219, 127, 211, 78, 230, 97, 238] => {
-                let evt: TradeEvent = borsh::from_slice(bytes)?;
+                let evt: TradeEvent = borsh1::try_from_slice_unchecked(bytes)?;
                 Self::Trade(evt)
             }
             [27, 114, 169, 77, 222, 235, 99, 118] => {
-                let evt: CreateEvent = borsh::from_slice(bytes)?;
+                let evt: CreateEvent = borsh1::try_from_slice_unchecked(bytes)?;
                 Self::Create(evt)
             }
             [95, 114, 97, 156, 212, 46, 152, 8] => {
-                let evt: CompleteEvent = borsh::from_slice(bytes)?;
+                let evt: CompleteEvent = borsh1::try_from_slice_unchecked(bytes)?;
                 Self::Complete(evt)
             }
             [223, 195, 159, 246, 62, 48, 143, 131] => {
-                let evt: SetParamsEvent = borsh::from_slice(bytes)?;
+                let evt: SetParamsEvent = borsh1::try_from_slice_unchecked(bytes)?;
                 Self::SetParams(evt)
             }
             _ => anyhow::bail!("log is not pumpfun log: {log}"),
@@ -109,12 +109,28 @@ impl PumpFunEvents {
 
 #[cfg(test)]
 mod tests {
+    use base64::prelude::BASE64_STANDARD;
+
     use super::*;
 
     #[test]
-    fn test_decode_pump_evt() {
+    fn test_decode_pump_trade_evt() {
         let encoded_evt = "2K7nL28PxCW8ejnyCeuMpbXwJKzXo9q1ecEyRsXKe7VYaxLjCqTrMCp9pnwrwTG7rmaRTa1vcTqa8LGDfNZ9bpcKgSPgNDe3MrFn57HPpTzriKWACnH99YDM7dfTpxwRoCQTrs6BSdGSXgusW9Jbz1yAV9D32MZ62azsiK16Gksbq7cinYkugTfQDJM5";
         let evt = PumpFunEvents::from_cpi_log(encoded_evt).unwrap();
-        println!("{evt:#?}");
+        println!("pumpfun trade event: {evt:#?}");
+    }
+
+    #[test]
+    fn test_decode_pump_create_evt() {
+        let encode_created_evt = "3ck7szVsdFfNhc7Yijezdmy73fWycmttUN6UNb1vQjPYZxr67fnmDnC2MgoRbX4RAzyCtqLwnaKqkRfyCF34WAB9Wxsm1aojum6cU4aMuUKwnuDzE39zoQV1G36mGdwspN52tiueFdcB7CMNK1ejYzzdM6ppYRK1Miay5UirZTWuNZESJz5Ci9smPWQoRvftDYvciK7WYg4TcVkteadFBcMzywKFWBhwshyyzc6cMv1brCM3G5nVNycLKtVJkwcnfLaLCz469dhdyZ9PARNfvSiGHZ74GBJecXq8BYu3Nmh36hB3Qt3fnbdvQFhCtkCD68ziVTzy8XbvedYsRvgijDSJXTU1h8FPzzebXXwKzgrb";
+        let evt = PumpFunEvents::from_cpi_log(encode_created_evt).unwrap();
+        println!("pumpfun create event: {evt:#?}");
+    }
+
+    #[test]
+    fn test_decode_pump_compete_evt() {
+        let encoded_complete_evt = "YeADJEDSy5WzCFuDLrfFZ2pQG5GsJCGudQvZj1RHwD74UBRabt1MxxGPoTRn432WCj9Vf1P127Qp6qABSeNoFzvj4XikFhDkePCMjuTk178GtBLsbaKC7tt4yJvwcQnuY7bSqHLsyadheV3Z4YJjPnbPJ6PBMXrvEyMZ";
+        let evt = PumpFunEvents::from_cpi_log(encoded_complete_evt).unwrap();
+        println!("pumpfun complete event: {evt:#?}");
     }
 }

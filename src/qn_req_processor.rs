@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -8,7 +9,7 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use serde_with::{DisplayFromStr, serde_as};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     cache::{
@@ -76,7 +77,7 @@ pub struct QnStreamMetadata {
     pub batch_start_range: u64,
     pub dataset: String,
     // -1 means never end
-    pub end_range: i128,
+    pub end_range: i64,
     pub keep_distance_from_tip: u64,
     pub network: String,
     pub start_range: u64,
@@ -97,6 +98,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
         let start = Instant::now();
         let mut conn = redis_client.get_multiplexed_async_connection().await?;
         let reqs = cache::take_qn_requests(&mut conn).await?;
+        drop(conn);
+
         let webhook_reqs: Vec<_> = futures::stream::iter(reqs)
             .map(|it| async move { serde_json::from_str::<QnSolDexDatahubWebhookReq>(&it) })
             .buffered(5)
@@ -126,6 +129,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
         let min_slot = slots.iter().min().copied().unwrap_or_default();
         let max_slot = slots.iter().max().copied().unwrap_or_default();
         let mut all_events = vec![];
+        let mut mints = HashSet::new();
 
         for tx in txs {
             let slot = tx.slot;
@@ -163,6 +167,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
+                                mints.insert(pool_created_record.mint_a);
+                                mints.insert(pool_created_record.mint_b);
                                 all_events.push(DexEvent::PoolCreated(pool_created_record));
                             }
                         }
@@ -178,6 +184,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             )
                             .await?;
                             if let Some(trade) = trade {
+                                mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
                             }
                         }
@@ -193,8 +200,13 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             )
                             .await?;
                             if let Some(trade) = trade {
+                                mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
                             }
+                        }
+                        Err(err) => {
+                            warn!("!!!!!!!!!!!!! parse ray amm log error: {err}, tx: {txid}");
+                            continue;
                         }
                         _ => continue,
                     }
@@ -211,6 +223,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
+                                mints.insert(pool_created_record.mint_a);
+                                mints.insert(pool_created_record.mint_b);
                                 all_events.push(DexEvent::PoolCreated(pool_created_record));
                             }
                         }
@@ -226,6 +240,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             )
                             .await?;
                             if let Some(trade) = trade {
+                                mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
                             }
                         }
@@ -241,7 +256,12 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             drop(redis_conn);
 
                             let complete_evt = PumpfunCompleteRecord::new(tx_meta.clone(), &evt);
+                            mints.insert(complete_evt.mint);
                             all_events.push(DexEvent::PumpfunComplete(complete_evt))
+                        }
+                        Err(err) => {
+                            warn!("!!!!!!!!!!!!! parse pumpfun log error: {err}, tx: {txid}");
+                            continue;
                         }
                         _ => continue,
                     }
@@ -263,6 +283,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
+                                mints.insert(pool_created_record.mint_a);
+                                mints.insert(pool_created_record.mint_b);
                                 all_events.push(DexEvent::PoolCreated(pool_created_record));
                             }
                         }
@@ -278,10 +300,14 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             )
                             .await?;
                             if let Some(trade) = trade {
+                                mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
                             }
                         }
-                        Err(_) => continue,
+                        Err(_err) => {
+                            // warn!("!!!!!!!!!!!!! parse meteora dlmm log error: {err}, tx: {txid}");
+                            continue;
+                        }
                     }
                 }
             }
@@ -291,6 +317,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
         if events_len > 0 {
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
             cache::rpush_dex_evts(&mut conn, &all_events).await?;
+            drop(conn);
             let ms = start.elapsed().as_millis();
             info!(
                 "parsed events: {events_len}, parse take time: {ms} ms, slot range: [{min_slot} - {max_slot}] time diff: {time_diff} seconds"

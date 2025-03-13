@@ -30,7 +30,7 @@ impl DexEvtWebhook {
 
             let events_len = events.len();
             if events_len == 0 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
 
@@ -51,13 +51,23 @@ impl DexEvtWebhook {
                 }
             }
 
+            let pump_complete_evts_len = pumpfun_complete_evts.len();
+            let pool_created_evts_len = pool_created_evts.len();
+            let trade_evts_len = trade_evts.len();
             let req = WebhookReq {
                 pumpfun_complete_evts,
                 pool_created_evts,
                 trade_evts,
             };
 
-            info!("send {} trades to webhook: {}", events_len, self.endpoint);
+            info!(
+                "send total {} dex events to webhook: {}",
+                events_len, self.endpoint
+            );
+            info!(
+                "contain {} trade events, {} pool created events, {} pump complete events",
+                trade_evts_len, pool_created_evts_len, pump_complete_evts_len,
+            );
             let msg = serde_json::to_string(&req)
                 .map_err(|err| anyhow!("failed serialize dex events from redis: {err}"))?;
             let webhook_resp = self
