@@ -97,7 +97,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
     loop {
         let start = Instant::now();
         let mut conn = redis_client.get_multiplexed_async_connection().await?;
-        let reqs = cache::take_qn_requests(&mut conn).await?;
+        let reqs = cache::lrange_qn_requests(&mut conn).await?;
         drop(conn);
 
         let webhook_reqs: Vec<_> = futures::stream::iter(reqs)
@@ -105,6 +105,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
             .buffered(5)
             .try_collect::<Vec<_>>()
             .await?;
+        let webhook_req_len = webhook_reqs.len();
 
         let (metas, txs): (Vec<_>, Vec<_>) = webhook_reqs
             .into_iter()
@@ -317,6 +318,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
         if events_len > 0 {
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
             cache::rpush_dex_evts(&mut conn, &all_events).await?;
+            cache::ltrim_qn_requests(&mut conn, webhook_req_len).await?;
             drop(conn);
             let ms = start.elapsed().as_millis();
             info!(

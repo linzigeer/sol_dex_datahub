@@ -22,8 +22,7 @@ pub async fn rpush_qn_request(conn: &mut MultiplexedConnection, req: String) -> 
     let _: () = cmd.query_async(conn).await?;
     Ok(())
 }
-
-pub async fn take_qn_requests(conn: &mut MultiplexedConnection) -> Result<Vec<String>> {
+pub async fn lrange_qn_requests(conn: &mut MultiplexedConnection) -> Result<Vec<String>> {
     let llen: u64 = redis::cmd("llen")
         .arg(QN_REQ_LIST_KEY)
         .query_async(conn)
@@ -37,13 +36,15 @@ pub async fn take_qn_requests(conn: &mut MultiplexedConnection) -> Result<Vec<St
         .arg(llen - 1)
         .query_async(conn)
         .await?;
+    Ok(records)
+}
 
+pub async fn ltrim_qn_requests(conn: &mut MultiplexedConnection, len: usize) -> Result<()> {
     let _: () = redis::cmd("ltrim")
         .arg(QN_REQ_LIST_KEY)
-        .arg(llen)
+        .arg(len)
         .arg(-1)
         .query_async(conn)
         .await?;
-
-    Ok(records)
+    Ok(())
 }
