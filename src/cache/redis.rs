@@ -49,15 +49,17 @@ pub trait RedisCacheRecord: Serialize + DeserializeOwned {
         }
     }
 
-    fn mget(
-        conn: &mut MultiplexedConnection,
-        keys: &[&str],
-    ) -> impl Future<Output = Result<Vec<Option<Self>>>> + Send {
-        async move {
-            let result: Vec<Option<String>> = conn.mget(keys).await?;
-            Ok(vec![])
-        }
-    }
+    // TODO: impl it
+    //
+    // fn mget(
+    //     _conn: &mut MultiplexedConnection,
+    //     _keys: &[&str],
+    // ) -> impl Future<Output = Result<Vec<Option<Self>>>> + Send {
+    //     async move {
+    //         // let result: Vec<Option<String>> = conn.mget(keys).await?;
+    //         Ok(vec![])
+    //     }
+    // }
 
     fn save(&self, conn: &mut MultiplexedConnection) -> impl Future<Output = Result<()>> {
         async {
