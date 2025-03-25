@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
                             ..Default::default()
                         }
                     },
-                    commitment: Some(CommitmentLevel::Confirmed as i32),
+                    commitment: Some(CommitmentLevel::Processed as i32),
                     ..Default::default()
                 })
                 .await?;
@@ -112,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
                             blk_ts,
                             blk.transactions.len()
                         );
+                        if !blk_txs.contains_key(&blk.slot) {
+                            continue;
+                        }
                         let txs = blk_txs.remove(&blk.slot).unwrap();
                         for tx in txs {
                             // let meta = tx.meta.unwrap();

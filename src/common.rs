@@ -10,6 +10,7 @@ pub const WSOL_MINT: Pubkey = pubkey!("So111111111111111111111111111111111111111
 pub enum Dex {
     RaydiumAmm,
     Pumpfun,
+    PumpAmm,
     MeteoraDlmm,
 }
 

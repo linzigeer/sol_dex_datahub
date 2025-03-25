@@ -18,6 +18,7 @@ use crate::{
     },
     common::TxBaseMetaInfo,
     meteora::{METEORA_DLMM_PROGRAM_ID, event::MeteoraDlmmEvents},
+    pumpamm::{PUMPAMM_PROGRAM_ID, event::PumpAmmEvents},
     pumpfun::{PUMPFUN_PROGRAM_ID, event::PumpFunEvents},
     raydium::{RAYDIUM_AMM_PROGRAM_ID, event::RayLogs},
 };
@@ -175,10 +176,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         Ok(RayLogs::SwapBaseIn(evt)) => {
                             let trade = TradeRecord::from_raydium_amm_swap_base_in(
-                                blk_ts,
-                                slot,
-                                txid.clone(),
-                                invocation.instruction.index,
+                                tx_meta.clone(),
                                 evt,
                                 accounts,
                                 redis_client.clone(),
@@ -191,10 +189,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         Ok(RayLogs::SwapBaseOut(evt)) => {
                             let trade = TradeRecord::from_raydium_amm_swap_base_out(
-                                blk_ts,
-                                slot,
-                                txid.clone(),
-                                invocation.instruction.index,
+                                tx_meta.clone(),
                                 evt,
                                 accounts,
                                 redis_client.clone(),
@@ -231,10 +226,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         Ok(PumpFunEvents::Trade(evt)) => {
                             let trade = TradeRecord::from_pumpfun_trade(
-                                blk_ts,
-                                slot,
-                                txid.clone(),
-                                invocation.instruction.index,
+                                tx_meta.clone(),
                                 evt,
                                 accounts,
                                 redis_client.clone(),
@@ -266,6 +258,56 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         _ => continue,
                     }
+                } else if invocation.program_id == PUMPAMM_PROGRAM_ID.to_string() {
+                    match PumpAmmEvents::from_cpi_log(&log.replace("pumpamm cpi log: ", "")) {
+                        Ok(PumpAmmEvents::CreatePool(evt)) => {
+                            let pool_created_record =
+                                DexPoolCreatedRecord::from_pumpamm_create_log(tx_meta.clone(), evt);
+
+                            let pool_record = pool_created_record.as_pool_record();
+                            let mut redis_conn =
+                                redis_client.get_multiplexed_async_connection().await?;
+                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            drop(redis_conn);
+
+                            println!("=======> {pool_created_record:#?}");
+                            if pool_created_record.is_wsol_pool() {
+                                mints.insert(pool_created_record.mint_a);
+                                mints.insert(pool_created_record.mint_b);
+                                all_events.push(DexEvent::PoolCreated(pool_created_record));
+                            }
+                        }
+                        Ok(PumpAmmEvents::Buy(evt)) => {
+                            let trade = TradeRecord::from_pumpamm_buy(
+                                tx_meta.clone(),
+                                evt,
+                                accounts,
+                                redis_client.clone(),
+                            )
+                            .await?;
+                            if let Some(trade) = trade {
+                                mints.insert(trade.mint);
+                                all_events.push(DexEvent::Trade(trade));
+                            }
+                        }
+                        Ok(PumpAmmEvents::Sell(evt)) => {
+                            let trade = TradeRecord::from_pumpamm_sell(
+                                tx_meta.clone(),
+                                evt,
+                                accounts,
+                                redis_client.clone(),
+                            )
+                            .await?;
+                            if let Some(trade) = trade {
+                                mints.insert(trade.mint);
+                                all_events.push(DexEvent::Trade(trade));
+                            }
+                        }
+                        Err(err) => {
+                            warn!("!!!!!!!!!!!!! parse pumpamm log error: {err}, tx: {txid}");
+                            continue;
+                        }
+                    }
                 } else if invocation.program_id == METEORA_DLMM_PROGRAM_ID.to_string() {
                     match MeteoraDlmmEvents::from_cpi_log(
                         &log.replace("meteora dlmm cpi log: ", ""),
@@ -291,10 +333,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         Ok(MeteoraDlmmEvents::Swap(evt)) => {
                             let trade = TradeRecord::from_meteora_dlmm_swap(
-                                blk_ts,
-                                slot,
-                                txid.clone(),
-                                invocation.instruction.index,
+                                tx_meta.clone(),
                                 evt,
                                 accounts,
                                 redis_client.clone(),

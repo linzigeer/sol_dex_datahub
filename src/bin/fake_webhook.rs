@@ -2,8 +2,9 @@ use std::{net::SocketAddr, time::Instant};
 
 use anyhow::Result;
 use axum::{Router, extract::DefaultBodyLimit, routing::post};
-use chrono::Utc;
-use tokio::{fs, net::TcpListener};
+// use chrono::Utc;
+// use tokio::fs;
+use tokio::net::TcpListener;
 use tower_http::{decompression::RequestDecompressionLayer, trace::TraceLayer};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Registry, fmt::Layer, layer::SubscriberExt};
@@ -48,8 +49,8 @@ pub async fn webhook(req_body: String) -> Result<(), String> {
 
     let body_start = &req_body[0..body_start_len];
     info!("request body is start with: {}", body_start);
-    let file_name = format!("{}.json", Utc::now().timestamp_millis());
-    fs::write(file_name, req_body).await.unwrap();
+    // let file_name = format!("{}.json", Utc::now().timestamp_millis());
+    // fs::write(file_name, req_body).await.unwrap();
     let elapsed = start.elapsed().as_millis();
     info!("process webook take {elapsed} ms");
 

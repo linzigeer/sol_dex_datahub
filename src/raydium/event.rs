@@ -1,5 +1,5 @@
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 
@@ -130,7 +130,7 @@ pub enum RayLogs {
 
 impl RayLogs {
     pub fn decode(log: &str) -> Result<Self> {
-        let bytes = STANDARD.decode(log).unwrap();
+        let bytes = STANDARD.decode(log)?;
         let result = match LogType::from_u8(bytes[0]) {
             LogType::Init => {
                 let log: InitLog = bincode::deserialize(&bytes)?;

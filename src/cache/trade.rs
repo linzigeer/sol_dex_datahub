@@ -7,8 +7,9 @@ use serde_with::{DisplayFromStr, serde_as};
 
 use crate::{
     cache::{DexPoolRecord, RedisCacheRecord},
-    common::{Dex, WSOL_MINT, utils},
+    common::{Dex, TxBaseMetaInfo, WSOL_MINT, utils},
     meteora::event::MeteoraDlmmSwapEvent,
+    pumpamm::event::{PumpAmmBuyEvent, PumpAmmSellEvent},
     pumpfun::event::TradeEvent,
     qn_req_processor::IxAccount,
     raydium::event::{SwapBaseInLog, SwapBaseOutLog},
@@ -40,12 +41,179 @@ pub struct TradeRecord {
 }
 
 impl TradeRecord {
-    #[allow(clippy::too_many_arguments)]
+    pub async fn from_pumpamm_buy(
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
+        log: PumpAmmBuyEvent,
+        accounts: &[IxAccount],
+        redis_client: Arc<redis::Client>,
+    ) -> Result<Option<Self>> {
+        let pool = log.pool;
+        let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
+        let cached_pool =
+            DexPoolRecord::from_pumpamm_swap_accounts(pool, accounts, &mut redis_conn).await?;
+        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        drop(redis_conn);
+        if !cached_pool.is_wsol_pool() {
+            // only accept WSOL pair
+            return Ok(None);
+        }
+
+        let base_token_vault = accounts
+            .get(7)
+            .ok_or_else(|| anyhow!("need base token vault in pumpamm swap log"))?;
+        let base_token_amt = base_token_vault
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("base token should have balance in pumpamm swap log"))?;
+
+        let quote_token_vault = accounts
+            .get(8)
+            .ok_or_else(|| anyhow!("need quote token vault in pumpamm swap log"))?;
+        let quote_token_amt = quote_token_vault
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("quote token should have balance in pumpamm swap log"))?;
+
+        let (pool_sol_amt, pool_token_amt, sol_amt, token_amt, is_buy) =
+            if cached_pool.mint_a == WSOL_MINT {
+                (
+                    base_token_amt.amt,
+                    quote_token_amt.amt,
+                    log.base_amount_out,
+                    log.quote_amount_in_with_lp_fee,
+                    false,
+                )
+            } else {
+                (
+                    quote_token_amt.amt,
+                    base_token_amt.amt,
+                    log.quote_amount_in_with_lp_fee,
+                    log.base_amount_out,
+                    true,
+                )
+            };
+
+        let trader = log.user;
+        let mint = cached_pool.token_mint();
+        let decimals = cached_pool.token_decimals();
+        let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+
+        Ok(Some(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            mint,
+            decimals,
+            trader,
+            dex: Dex::PumpAmm,
+            pool,
+            pool_token_amt,
+            pool_sol_amt,
+            is_buy,
+            sol_amt,
+            token_amt,
+            price_sol,
+        }))
+    }
+
+    pub async fn from_pumpamm_sell(
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
+        log: PumpAmmSellEvent,
+        accounts: &[IxAccount],
+        redis_client: Arc<redis::Client>,
+    ) -> Result<Option<Self>> {
+        let pool = log.pool;
+        let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
+        let cached_pool =
+            DexPoolRecord::from_pumpamm_swap_accounts(pool, accounts, &mut redis_conn).await?;
+        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        drop(redis_conn);
+        if !cached_pool.is_wsol_pool() {
+            // only accept WSOL pair
+            return Ok(None);
+        }
+
+        let base_token_vault = accounts
+            .get(7)
+            .ok_or_else(|| anyhow!("need base token vault in pumpamm swap log"))?;
+        let base_token_amt = base_token_vault
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("base token should have balance in pumpamm swap log"))?;
+
+        let quote_token_vault = accounts
+            .get(8)
+            .ok_or_else(|| anyhow!("need quote token vault in pumpamm swap log"))?;
+        let quote_token_amt = quote_token_vault
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("quote token should have balance in pumpamm swap log"))?;
+
+        let (pool_sol_amt, pool_token_amt, sol_amt, token_amt, is_buy) =
+            if cached_pool.mint_a == WSOL_MINT {
+                (
+                    base_token_amt.amt,
+                    quote_token_amt.amt,
+                    log.base_amount_in,
+                    log.user_quote_amount_out,
+                    true,
+                )
+            } else {
+                (
+                    quote_token_amt.amt,
+                    base_token_amt.amt,
+                    log.user_quote_amount_out,
+                    log.base_amount_in,
+                    false,
+                )
+            };
+
+        let trader = log.user;
+        let mint = cached_pool.token_mint();
+        let decimals = cached_pool.token_decimals();
+        let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+
+        Ok(Some(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            mint,
+            decimals,
+            trader,
+            dex: Dex::PumpAmm,
+            pool,
+            pool_token_amt,
+            pool_sol_amt,
+            is_buy,
+            sol_amt,
+            token_amt,
+            price_sol,
+        }))
+    }
+
     pub async fn from_meteora_dlmm_swap(
-        blk_ts: DateTime<Utc>,
-        slot: u64,
-        txid: String,
-        idx: u64,
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
         log: MeteoraDlmmSwapEvent,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,
@@ -146,12 +314,13 @@ impl TradeRecord {
         }))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn from_raydium_amm_swap_base_in(
-        blk_ts: DateTime<Utc>,
-        slot: u64,
-        txid: String,
-        idx: u64,
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
         log: SwapBaseInLog,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,
@@ -264,12 +433,13 @@ impl TradeRecord {
         }))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn from_raydium_amm_swap_base_out(
-        blk_ts: DateTime<Utc>,
-        slot: u64,
-        txid: String,
-        idx: u64,
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
         log: SwapBaseOutLog,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,
@@ -383,10 +553,12 @@ impl TradeRecord {
     }
 
     pub async fn from_pumpfun_trade(
-        blk_ts: DateTime<Utc>,
-        slot: u64,
-        txid: String,
-        idx: u64,
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
         log: TradeEvent,
         accounts: &[IxAccount],
         redis_client: Arc<redis::Client>,

@@ -10,6 +10,7 @@ use solana_sdk::pubkey::Pubkey;
 use crate::{
     common::{Dex, TxBaseMetaInfo, WSOL_MINT},
     meteora::event::MeteoraLbPairCreateEvent,
+    pumpamm::event::PumpAmmCreatePoolEvent,
     pumpfun::event::CreateEvent,
     qn_req_processor::IxAccount,
     raydium::event::InitLog,
@@ -75,6 +76,29 @@ impl DexPoolCreatedRecord {
             mint_b: WSOL_MINT,
             decimals_a: 6,
             decimals_b: 9,
+        }
+    }
+
+    pub fn from_pumpamm_create_log(tx_meta: TxBaseMetaInfo, log: PumpAmmCreatePoolEvent) -> Self {
+        let TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        } = tx_meta;
+
+        DexPoolCreatedRecord {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            addr: log.pool,
+            creator: log.creator,
+            dex: Dex::PumpAmm,
+            mint_a: log.base_mint,
+            mint_b: log.quote_mint,
+            decimals_a: log.base_mint_decimals,
+            decimals_b: log.quote_mint_decimals,
         }
     }
 
@@ -238,6 +262,54 @@ impl DexPoolRecord {
             pool_record.save_ex(redis_conn, 3600 * 12).await?;
             cached_pool = Some(pool_record);
         }
+        Ok(cached_pool.unwrap())
+    }
+
+    pub async fn from_pumpamm_swap_accounts(
+        pool_pubkey: Pubkey,
+        accounts: &[IxAccount],
+        redis_conn: &mut MultiplexedConnection,
+    ) -> Result<Self> {
+        let key = format!("{}{}", Self::prefix(), pool_pubkey);
+        let mut cached_pool = Self::from_redis(redis_conn, &key).await?;
+        if cached_pool.is_none() {
+            let base_token_vault_idx = 7;
+            let quote_token_vault_idx = 8;
+
+            let base_token_vault = accounts
+                .get(base_token_vault_idx)
+                .ok_or_else(|| anyhow!("need base token vault in pumpamm swap log"))?;
+            let base_token_amt = base_token_vault
+                .post_amt
+                .token
+                .clone()
+                .ok_or_else(|| anyhow!("base token should have balance in pumpamm swap log"))?;
+            let mint_a = Pubkey::from_str(&base_token_amt.mint)?;
+            let decimals_a = base_token_amt.decimals;
+
+            let quote_token_vault = accounts
+                .get(quote_token_vault_idx)
+                .ok_or_else(|| anyhow!("need quote token vault in pumpamm swap log"))?;
+            let quote_token_amt =
+                quote_token_vault.post_amt.token.clone().ok_or_else(|| {
+                    anyhow!("quote token should have balance in pumpamm swap log")
+                })?;
+            let mint_b = Pubkey::from_str(&quote_token_amt.mint)?;
+            let decimals_b = quote_token_amt.decimals;
+
+            let pool_record = Self {
+                addr: pool_pubkey,
+                dex: Dex::PumpAmm,
+                is_complete: false,
+                mint_a,
+                mint_b,
+                decimals_a,
+                decimals_b,
+            };
+            pool_record.save_ex(redis_conn, 3600 * 12).await?;
+            cached_pool = Some(pool_record);
+        }
+
         Ok(cached_pool.unwrap())
     }
 

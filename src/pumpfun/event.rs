@@ -3,7 +3,7 @@ use anyhow::Result;
 use borsh::BorshDeserialize;
 use solana_sdk::borsh1;
 use solana_sdk::pubkey::Pubkey;
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug, BorshDeserialize)]
 pub struct TradeEvent {
@@ -70,6 +70,7 @@ pub enum PumpFunEventKind {
 
 impl PumpFunEvents {
     pub fn from_cpi_log(log: &str) -> Result<Self> {
+        debug!("parse pumpfun log: {log}");
         let bytes = bs58::decode(log).into_vec()?;
         let bytes = &bytes[8..];
 
@@ -90,7 +91,11 @@ impl PumpFunEvents {
                 let evt: SetParamsEvent = borsh1::try_from_slice_unchecked(bytes)?;
                 Self::SetParams(evt)
             }
-            _ => anyhow::bail!("log is not pumpfun log: {log}"),
+            _ => {
+                let msg = format!("log is not pumpfun log: {log}");
+                warn!(msg);
+                anyhow::bail!(msg)
+            }
         };
 
         Ok(result)
