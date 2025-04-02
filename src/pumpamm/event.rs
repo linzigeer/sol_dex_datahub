@@ -1,7 +1,7 @@
 use anyhow::Result;
 use borsh::BorshDeserialize;
 use solana_sdk::pubkey::Pubkey;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug, Clone, Copy, BorshDeserialize)]
 pub struct PumpAmmCreatePoolEvent {
