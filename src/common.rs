@@ -12,6 +12,7 @@ pub enum Dex {
     Pumpfun,
     PumpAmm,
     MeteoraDlmm,
+    MeteoraDamm,
 }
 
 #[derive(Debug, Clone)]

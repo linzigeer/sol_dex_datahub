@@ -8,13 +8,15 @@ use serde_with::{DisplayFromStr, serde_as};
 use crate::{
     cache::{DexPoolRecord, RedisCacheRecord},
     common::{Dex, TxBaseMetaInfo, WSOL_MINT, utils},
-    meteora::event::MeteoraDlmmSwapEvent,
+    meteora::{damm::event::MeteoraDammSwap, dlmm::event::MeteoraDlmmSwapEvent},
     pumpamm::event::{PumpAmmBuyEvent, PumpAmmSellEvent},
     pumpfun::event::TradeEvent,
     qn_req_processor::IxAccount,
     raydium::event::{SwapBaseInLog, SwapBaseOutLog},
 };
 use solana_sdk::pubkey::Pubkey;
+
+use super::DEX_POOL_RECORD_EXP_SECS;
 
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,7 +58,9 @@ impl TradeRecord {
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
             DexPoolRecord::from_pumpamm_swap_accounts(pool, accounts, &mut redis_conn).await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
         if !cached_pool.is_wsol_pool() {
             // only accept WSOL pair
@@ -139,7 +143,9 @@ impl TradeRecord {
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
             DexPoolRecord::from_pumpamm_swap_accounts(pool, accounts, &mut redis_conn).await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
         if !cached_pool.is_wsol_pool() {
             // only accept WSOL pair
@@ -226,7 +232,9 @@ impl TradeRecord {
         let cached_pool =
             DexPoolRecord::from_meteora_swap_accounts(lb_pair_pubkey, accounts, &mut redis_conn)
                 .await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
         if !cached_pool.is_wsol_pool() {
             // only accept WSOL pair
@@ -314,6 +322,117 @@ impl TradeRecord {
         }))
     }
 
+    pub async fn from_meteora_damm_swap(
+        TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        }: TxBaseMetaInfo,
+        log: MeteoraDammSwap,
+        accounts: &[IxAccount],
+        redis_client: Arc<redis::Client>,
+    ) -> Result<Option<Self>> {
+        let pool_acc = accounts
+            .first()
+            .ok_or_else(|| anyhow!("need meteora damm pool pubkey in swap log"))?;
+        let pool_pubkey = Pubkey::from_str(&pool_acc.pubkey)?;
+        let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
+        let cached_pool =
+            DexPoolRecord::from_meteora_damm_swap_accounts(pool_pubkey, accounts, &mut redis_conn)
+                .await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
+        drop(redis_conn);
+        if !cached_pool.is_wsol_pool() {
+            // only accept WSOL pair
+            return Ok(None);
+        }
+
+        let trader_acc = accounts
+            .get(12)
+            .ok_or_else(|| anyhow!("need trader pubkey in meteora damm swap log"))?;
+        let trader = Pubkey::from_str(&trader_acc.pubkey)?;
+
+        let token_a_vault = accounts
+            .get(5)
+            .ok_or_else(|| anyhow!("need token x value in meteora damm swap log"))?;
+        let pool_token_a_amt = token_a_vault.post_amt.token.clone().ok_or_else(|| {
+            anyhow!(
+                "meteora damm token a vault {} should have balance",
+                token_a_vault.pubkey
+            )
+        })?;
+        let token_b_vault = accounts
+            .get(6)
+            .ok_or_else(|| anyhow!("need token b value in meteora damm swap log"))?;
+        let pool_token_b_amt = token_b_vault.post_amt.token.clone().ok_or_else(|| {
+            anyhow!(
+                "meteora damm token b vault {} should have balance",
+                token_b_vault.pubkey
+            )
+        })?;
+
+        let user_source_token_mint = accounts
+            .get(1)
+            .and_then(|it| it.post_amt.token.clone())
+            .map(|it| it.mint);
+        let user_dest_token_mint = accounts
+            .get(2)
+            .and_then(|it| it.post_amt.token.clone())
+            .map(|it| it.mint);
+
+        if user_source_token_mint.is_none() && user_dest_token_mint.is_none() {
+            anyhow::bail!(
+                "meteora damm swap have no user source and destination token balance change"
+            );
+        }
+
+        let is_buy = if let Some(user_source_token_mint) = user_source_token_mint {
+            user_source_token_mint == WSOL_MINT.to_string()
+        } else {
+            user_dest_token_mint.unwrap() != WSOL_MINT.to_string()
+        };
+        let (sol_amt, token_amt) = if is_buy {
+            (log.in_amount - log.protocol_fee, log.out_amount)
+        } else {
+            (log.out_amount, log.in_amount - log.protocol_fee)
+        };
+        if sol_amt == 0 || token_amt == 0 {
+            return Ok(None);
+        }
+
+        let mint = cached_pool.token_mint();
+        let decimals = cached_pool.token_decimals();
+        let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+
+        let is_token_a_sol = pool_token_a_amt.mint == WSOL_MINT.to_string();
+        let (pool_token_amt, pool_sol_amt) = if is_token_a_sol {
+            (pool_token_b_amt.amt, pool_token_a_amt.amt)
+        } else {
+            (pool_token_a_amt.amt, pool_token_b_amt.amt)
+        };
+
+        Ok(Some(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            mint,
+            decimals,
+            trader,
+            dex: Dex::MeteoraDamm,
+            pool: pool_pubkey,
+            pool_token_amt,
+            pool_sol_amt,
+            is_buy,
+            sol_amt,
+            token_amt,
+            price_sol,
+        }))
+    }
+
     pub async fn from_raydium_amm_swap_base_in(
         TxBaseMetaInfo {
             blk_ts,
@@ -333,7 +452,9 @@ impl TradeRecord {
         let cached_pool =
             DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
                 .await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
 
         if !cached_pool.is_wsol_pool() {
@@ -452,7 +573,9 @@ impl TradeRecord {
         let cached_pool =
             DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
                 .await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
 
         if !cached_pool.is_wsol_pool() {
@@ -570,7 +693,9 @@ impl TradeRecord {
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
             DexPoolRecord::from_pumpfun_trade_accounts(accounts, &mut redis_conn).await?;
-        cached_pool.save_ex(&mut redis_conn, 3600 * 12).await?;
+        cached_pool
+            .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
+            .await?;
         drop(redis_conn);
 
         if !cached_pool.is_wsol_pool() {

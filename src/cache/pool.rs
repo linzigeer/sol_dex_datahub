@@ -9,7 +9,13 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{
     common::{Dex, TxBaseMetaInfo, WSOL_MINT},
-    meteora::event::MeteoraLbPairCreateEvent,
+    meteora::{
+        damm::{
+            event::MeteoraDammPoolCreated,
+            instruction::{INIT_WITH_CONFIG_IX_ID, INIT_WITH_CONFIG2_IX_ID},
+        },
+        dlmm::event::MeteoraLbPairCreateEvent,
+    },
     pumpamm::event::PumpAmmCreatePoolEvent,
     pumpfun::event::CreateEvent,
     qn_req_processor::IxAccount,
@@ -38,6 +44,8 @@ pub struct DexPoolCreatedRecord {
     pub decimals_a: u8,
     pub decimals_b: u8,
 }
+
+pub const DEX_POOL_RECORD_EXP_SECS: u64 = 3600 * 12;
 
 impl DexPoolCreatedRecord {
     pub fn is_wsol_pool(&self) -> bool {
@@ -201,6 +209,69 @@ impl DexPoolCreatedRecord {
             decimals_b: y_valut_token_amt.decimals,
         })
     }
+
+    pub fn from_meteora_damm_pool_create_log(
+        tx_meta: TxBaseMetaInfo,
+        log: MeteoraDammPoolCreated,
+        accounts: &[IxAccount],
+        ix_data: &str,
+    ) -> Result<Self> {
+        let TxBaseMetaInfo {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+        } = tx_meta;
+
+        let MeteoraDammPoolCreated {
+            pool,
+            token_a_mint,
+            token_b_mint,
+            ..
+        } = log;
+        let ix_bytes = bs58::decode(ix_data).into_vec()?;
+        let has_config = ix_bytes.starts_with(&INIT_WITH_CONFIG_IX_ID)
+            || ix_bytes.starts_with(&INIT_WITH_CONFIG2_IX_ID);
+        let (token_vault_a_idx, token_vault_b_idx) = if has_config { (7, 8) } else { (6, 7) };
+
+        let a_vault_acc = accounts.get(token_vault_a_idx).ok_or_else(|| {
+            anyhow!("need a token vault in meteora damm create pool instruction accounts")
+        })?;
+        let a_valut_token_amt = a_vault_acc
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("meteora damm a valult should have token amt"))?;
+
+        let b_vault_acc = accounts.get(token_vault_b_idx).ok_or_else(|| {
+            anyhow!("need b token vault in meteora damm create pool instruction accounts")
+        })?;
+        let b_valut_token_amt = b_vault_acc
+            .post_amt
+            .token
+            .clone()
+            .ok_or_else(|| anyhow!("meteora damm b token valult should have token amt"))?;
+
+        let creator_idx = if has_config { 18 } else { 17 };
+        let creator_acc = accounts.get(creator_idx).ok_or_else(|| {
+            anyhow!("need pool creator in meteora damm create pool instruction accounts")
+        })?;
+        let creator_pubkey = Pubkey::from_str(&creator_acc.pubkey)?;
+
+        Ok(Self {
+            blk_ts,
+            slot,
+            txid,
+            idx,
+            addr: pool,
+            creator: creator_pubkey,
+            dex: Dex::MeteoraDamm,
+            mint_a: token_a_mint,
+            mint_b: token_b_mint,
+            decimals_a: a_valut_token_amt.decimals,
+            decimals_b: b_valut_token_amt.decimals,
+        })
+    }
 }
 
 #[serde_as]
@@ -259,7 +330,57 @@ impl DexPoolRecord {
                 decimals_a: token_x_decimals,
                 decimals_b: token_y_decimals,
             };
-            pool_record.save_ex(redis_conn, 3600 * 12).await?;
+            pool_record
+                .save_ex(redis_conn, DEX_POOL_RECORD_EXP_SECS)
+                .await?;
+            cached_pool = Some(pool_record);
+        }
+        Ok(cached_pool.unwrap())
+    }
+
+    pub async fn from_meteora_damm_swap_accounts(
+        pool: Pubkey,
+        accounts: &[IxAccount],
+        redis_conn: &mut MultiplexedConnection,
+    ) -> Result<Self> {
+        let key = format!("{}{}", DexPoolRecord::prefix(), pool);
+        let mut cached_pool = DexPoolRecord::from_redis(redis_conn, &key).await?;
+        if cached_pool.is_none() {
+            let token_vault_a = accounts
+                .get(5)
+                .ok_or_else(|| anyhow!("need token a value in meteora damm swap log"))?;
+            let pool_token_a_amt = token_vault_a.post_amt.token.clone().ok_or_else(|| {
+                anyhow!(
+                    "meteora damm token a vault {} should have balance",
+                    token_vault_a.pubkey
+                )
+            })?;
+            let token_a_mint = Pubkey::from_str(&pool_token_a_amt.mint)?;
+            let token_a_decimals = pool_token_a_amt.decimals;
+
+            let token_vault_b = accounts
+                .get(6)
+                .ok_or_else(|| anyhow!("need token b value in meteora damm swap log"))?;
+            let pool_token_b_amt = token_vault_b.post_amt.token.clone().ok_or_else(|| {
+                anyhow!(
+                    "meteora damm token b vault {} should have balance",
+                    token_vault_b.pubkey
+                )
+            })?;
+            let token_b_mint = Pubkey::from_str(&pool_token_b_amt.mint)?;
+            let token_b_decimals = pool_token_b_amt.decimals;
+            let pool_record = Self {
+                addr: pool,
+                dex: Dex::MeteoraDamm,
+                is_complete: false,
+                mint_a: token_a_mint,
+                mint_b: token_b_mint,
+                decimals_a: token_a_decimals,
+                decimals_b: token_b_decimals,
+            };
+            pool_record
+                .save_ex(redis_conn, DEX_POOL_RECORD_EXP_SECS)
+                .await?;
             cached_pool = Some(pool_record);
         }
         Ok(cached_pool.unwrap())
@@ -306,7 +427,9 @@ impl DexPoolRecord {
                 decimals_a,
                 decimals_b,
             };
-            pool_record.save_ex(redis_conn, 3600 * 12).await?;
+            pool_record
+                .save_ex(redis_conn, DEX_POOL_RECORD_EXP_SECS)
+                .await?;
             cached_pool = Some(pool_record);
         }
 
@@ -354,7 +477,9 @@ impl DexPoolRecord {
                 decimals_a,
                 decimals_b,
             };
-            pool_record.save_ex(redis_conn, 3600 * 12).await?;
+            pool_record
+                .save_ex(redis_conn, DEX_POOL_RECORD_EXP_SECS)
+                .await?;
             cached_pool = Some(pool_record);
         }
         Ok(cached_pool.unwrap())
@@ -396,7 +521,9 @@ impl DexPoolRecord {
                 decimals_a: 6,
                 decimals_b: 9,
             };
-            pool_record.save_ex(redis_conn, 3600 * 12).await?;
+            pool_record
+                .save_ex(redis_conn, DEX_POOL_RECORD_EXP_SECS)
+                .await?;
             cached_pool = Some(pool_record);
         }
         Ok(cached_pool.unwrap())

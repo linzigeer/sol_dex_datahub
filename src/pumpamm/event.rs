@@ -102,7 +102,6 @@ impl PumpAmmEvents {
             }
             _ => {
                 let msg = format!("log is not recognized as pump amm log: {log}");
-                warn!(msg);
                 anyhow::bail!(msg)
             }
         };

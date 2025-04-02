@@ -17,7 +17,10 @@ use crate::{
         RedisCacheRecord, TradeRecord,
     },
     common::TxBaseMetaInfo,
-    meteora::{METEORA_DLMM_PROGRAM_ID, event::MeteoraDlmmEvents},
+    meteora::{
+        METEORA_DAMM_PROGRAM_ID, METEORA_DLMM_PROGRAM_ID, damm::event::MeteoraDammEvents,
+        dlmm::event::MeteoraDlmmEvents,
+    },
     pumpamm::{PUMPAMM_PROGRAM_ID, event::PumpAmmEvents},
     pumpfun::{PUMPFUN_PROGRAM_ID, event::PumpFunEvents},
     raydium::{RAYDIUM_AMM_PROGRAM_ID, event::RayLogs},
@@ -93,6 +96,8 @@ pub struct QnSolDexDatahubWebhookReq {
     pub metadata: QnStreamMetadata,
 }
 
+const DEX_POOL_EXP_SECS: u64 = 3600 * 12;
+
 pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
     info!("start qn request processor........");
     loop {
@@ -145,6 +150,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                 }
                 let invocation = invocation.unwrap();
                 let accounts = &invocation.instruction.accounts;
+                let ix_data = invocation.instruction.data.as_str();
 
                 let tx_meta = TxBaseMetaInfo {
                     blk_ts,
@@ -165,7 +171,9 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             let pool_record: DexPoolRecord = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
-                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
@@ -215,7 +223,9 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             let pool_record = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
-                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
@@ -245,7 +255,9 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             );
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
-                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
                             drop(redis_conn);
 
                             let complete_evt = PumpfunCompleteRecord::new(tx_meta.clone(), &evt);
@@ -267,10 +279,11 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             let pool_record = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
-                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
                             drop(redis_conn);
 
-                            println!("=======> {pool_created_record:#?}");
                             if pool_created_record.is_wsol_pool() {
                                 mints.insert(pool_created_record.mint_a);
                                 mints.insert(pool_created_record.mint_b);
@@ -303,8 +316,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                                 all_events.push(DexEvent::Trade(trade));
                             }
                         }
-                        Err(err) => {
-                            warn!("!!!!!!!!!!!!! parse pumpamm log error: {err}, tx: {txid}");
+                        Err(_err) => {
+                            // warn!("!!!!!!!!!!!!! parse pumpamm log error: {err}, tx: {txid}");
                             continue;
                         }
                     }
@@ -322,7 +335,9 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             let pool_record: DexPoolRecord = pool_created_record.as_pool_record();
                             let mut redis_conn =
                                 redis_client.get_multiplexed_async_connection().await?;
-                            pool_record.save_ex(&mut redis_conn, 3600 * 12).await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
@@ -346,6 +361,54 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                         }
                         Err(_err) => {
                             // warn!("!!!!!!!!!!!!! parse meteora dlmm log error: {err}, tx: {txid}");
+                            continue;
+                        }
+                    }
+                } else if invocation.program_id == METEORA_DAMM_PROGRAM_ID.to_string() {
+                    match MeteoraDammEvents::from_log(
+                        &log.replace("meteora damm log Program data: ", ""),
+                    ) {
+                        Ok(MeteoraDammEvents::PoolCreated(evt)) => {
+                            let pool_created_record =
+                                DexPoolCreatedRecord::from_meteora_damm_pool_create_log(
+                                    tx_meta.clone(),
+                                    evt,
+                                    accounts,
+                                    ix_data,
+                                )?;
+                            let pool_record: DexPoolRecord = pool_created_record.as_pool_record();
+                            let mut redis_conn =
+                                redis_client.get_multiplexed_async_connection().await?;
+                            pool_record
+                                .save_ex(&mut redis_conn, DEX_POOL_EXP_SECS)
+                                .await?;
+                            drop(redis_conn);
+
+                            if pool_created_record.is_wsol_pool() {
+                                info!(
+                                    "==================> meteora damm create pool: {pool_created_record:#?}"
+                                );
+                                mints.insert(pool_created_record.mint_a);
+                                mints.insert(pool_created_record.mint_b);
+                                all_events.push(DexEvent::PoolCreated(pool_created_record));
+                            }
+                        }
+                        Ok(MeteoraDammEvents::Swap(evt)) => {
+                            let trade = TradeRecord::from_meteora_damm_swap(
+                                tx_meta.clone(),
+                                evt,
+                                accounts,
+                                redis_client.clone(),
+                            )
+                            .await?;
+                            if let Some(trade) = trade {
+                                info!("==================> meteora damm trade event: {trade:#?}");
+                                mints.insert(trade.mint);
+                                all_events.push(DexEvent::Trade(trade));
+                            }
+                        }
+                        Err(err) => {
+                            warn!("!!!!!!!!!!!!! parse meteora damm log error: {err}, tx: {txid}");
                             continue;
                         }
                     }
