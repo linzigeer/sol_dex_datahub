@@ -1,17 +1,21 @@
 use std::{collections::HashMap, time::Duration};
 
+use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
-use futures::{SinkExt, StreamExt};
-use solana_sdk::pubkey::Pubkey;
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc};
 use tokio::time::interval;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, Registry, fmt::Layer, layer::SubscriberExt};
+use tracing_subscriber::EnvFilter;
 use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient};
-use yellowstone_grpc_proto::geyser::{
-    CommitmentLevel, SubscribeRequest, SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
-    SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdatePong,
-    SubscribeUpdateSlot, SubscribeUpdateTransaction, subscribe_update::UpdateOneof,
+use yellowstone_grpc_proto::{
+    geyser::{
+        CommitmentLevel, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
+        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
+        SubscribeUpdateBlockMeta, SubscribeUpdatePong, SubscribeUpdateSlot,
+        SubscribeUpdateTransaction, subscribe_update::UpdateOneof,
+    },
+    tonic::Status,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -28,13 +32,13 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let subscriber = Registry::default().with(env_filter).with(
-        Layer::default()
-            .with_writer(std::io::stdout)
-            .with_ansi(false),
-    );
-
-    tracing::subscriber::set_global_default(subscriber)?;
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_ansi(false)
+        .init();
 
     let args = Args::parse();
 
@@ -45,198 +49,186 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
 
+    let req_future = send_request(&mut subscribe_tx);
+    let resp_future = process_response(&mut stream);
+
+    futures::try_join!(req_future, resp_future)?;
+
+    Ok(())
+}
+
+async fn send_request(
+    subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
+) -> Result<()> {
     let programs = vec![
-        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_owned(),
         "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P".to_owned(),
         "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_owned(),
+        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_owned(),
         "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo".to_owned(),
         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB".to_owned(),
     ];
 
-    futures::try_join!(
-        async move {
-            subscribe_tx
-                .send(SubscribeRequest {
-                    slots: maplit::hashmap! {
-                        "".to_owned() => SubscribeRequestFilterSlots {
-                            filter_by_commitment: Some(true),
-                            interslot_updates: Some(false)
-                        }
-                    },
-                    blocks: maplit::hashmap! {
-                        "".to_owned() => SubscribeRequestFilterBlocks {
-                            account_include:programs.clone(),
-                            include_transactions: Some(false),
-                            include_accounts: Some(false),
-                            include_entries: Some(false),
-                        }
-                    },
-                    transactions: maplit::hashmap! {
-                        "".to_owned() => SubscribeRequestFilterTransactions {
-                            vote: Some(false),
-                            failed: Some(false),
-                            account_include:programs.clone(),
-                            ..Default::default()
-                        }
-                    },
-                    commitment: Some(CommitmentLevel::Processed as i32),
+    subscribe_tx
+        .send(SubscribeRequest {
+            blocks_meta: maplit::hashmap! {
+                "".to_owned() => SubscribeRequestFilterBlocksMeta {},
+            },
+            transactions: maplit::hashmap! {
+                "".to_owned() => SubscribeRequestFilterTransactions {
+                    vote: Some(false),
+                    failed: Some(false),
+                    account_include:programs.clone(),
                     ..Default::default()
-                })
-                .await?;
-
-            let mut timer = interval(Duration::from_secs(3));
-            let mut id = 0;
-            loop {
-                timer.tick().await;
-                id += 1;
-                subscribe_tx
-                    .send(SubscribeRequest {
-                        ping: Some(SubscribeRequestPing { id }),
-                        ..Default::default()
-                    })
-                    .await?;
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        },
-        async move {
-            let mut blk_txs: HashMap<u64, Vec<SubscribeUpdateTransaction>> = HashMap::new();
-            while let Some(message) = stream.next().await {
-                match message?.update_oneof.expect("valid message") {
-                    UpdateOneof::Slot(SubscribeUpdateSlot { slot, .. }) => {
-                        info!("slot received: {slot}");
-                    }
-                    UpdateOneof::Block(blk) => {
-                        let blk_ts = blk.block_time.unwrap().timestamp;
-                        info!(
-                            "block slot: {}, blk_ts: {}, txs: {}",
-                            blk.slot,
-                            blk_ts,
-                            blk.transactions.len()
-                        );
-                        if !blk_txs.contains_key(&blk.slot) {
-                            continue;
-                        }
-                        let txs = blk_txs.remove(&blk.slot).unwrap();
-                        let ts_diff = Utc::now().timestamp() - blk_ts;
-                        for tx in txs {
-                            let tx_info = tx.transaction.unwrap();
-                            let tx_meta = tx_info.meta.unwrap();
-                            let failed = tx_meta.err.is_some();
-                            let txid = bs58::encode(tx_info.signature).into_string();
-                            info!("=======> tx: {txid}");
-
-                            let tx = tx_info.transaction.unwrap();
-                            let tx_msg = tx.message.unwrap();
-                            let mut msg_keys = tx_msg.account_keys.clone();
-
-                            let mut loaded_keys = vec![];
-                            for wk in tx_meta.loaded_writable_addresses.iter() {
-                                loaded_keys.push(wk.clone())
-                            }
-                            for rk in tx_meta.loaded_readonly_addresses.iter() {
-                                loaded_keys.push(rk.clone())
-                            }
-
-                            msg_keys.extend(loaded_keys.into_iter());
-                            info!("//////////////  all account len: {}", msg_keys.len());
-                            for (idx, ix) in tx_msg.instructions.iter().enumerate() {
-                                let ix = ix.clone();
-                                let ddd: Vec<_> = msg_keys
-                                    .iter()
-                                    .map(|it| bs58::encode(it).into_string())
-                                    .collect();
-                                let prog_id = ddd.get(ix.program_id_index as usize).unwrap();
-                                if prog_id == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" {
-                                    info!("all keys: {ddd:#?}");
-                                    info!("program: {idx}, {prog_id}");
-                                    info!("accounts: {:?}", ix.accounts);
-                                    for account_idx in ix.accounts.iter() {
-                                        info!("get accounts: {account_idx} .....");
-                                        let account_key =
-                                            msg_keys.get(*account_idx as usize).unwrap();
-                                        let account_key = bs58::encode(&account_key).into_string();
-                                        info!("account {}: {}", account_idx, account_key);
-                                    }
-
-                                    if let Some(iix) = tx_meta
-                                        .inner_instructions
-                                        .iter()
-                                        .find(|it| it.index as usize == idx)
-                                    {
-                                        for x in iix.instructions.iter() {
-                                            let pid = ddd.get(x.program_id_index as usize).unwrap();
-                                            info!("ix idx: {idx} program: {pid}");
-                                        }
-                                    }
-                                }
-                            }
-                            for iixs in tx_meta.inner_instructions.iter() {
-                                let iixs = iixs.clone();
-                                let ddd: Vec<_> = msg_keys
-                                    .iter()
-                                    .map(|it| bs58::encode(it).into_string())
-                                    .collect();
-                                for (idx, iix) in iixs.instructions.iter().enumerate() {
-                                    let prog_id = ddd.get(iix.program_id_index as usize).unwrap();
-                                    if prog_id == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" {
-                                        info!("all keys: {ddd:#?}");
-                                        info!("program: {idx}, {prog_id}");
-                                        info!("accounts: {:?}", iix.accounts);
-                                        for account_idx in iix.accounts.iter() {
-                                            info!("get accounts: {account_idx} .....");
-                                            let account_key =
-                                                msg_keys.get(*account_idx as usize).unwrap();
-                                            let account_key: Pubkey =
-                                                borsh::from_slice(account_key)?;
-                                            // let account_key =
-                                            //     bs58::encode(&account_key).into_string();
-                                            info!("account {}: {}", account_idx, account_key);
-                                        }
-
-                                        let ix_next1 =
-                                            iixs.instructions.get(idx + 1).cloned().unwrap();
-                                        let pid_next1 =
-                                            ddd.get(ix_next1.program_id_index as usize).unwrap();
-                                        info!("ix next1 program: {pid_next1}");
-
-                                        let ix_next2 =
-                                            iixs.instructions.get(idx + 2).cloned().unwrap();
-                                        let pid_next2 =
-                                            ddd.get(ix_next2.program_id_index as usize).unwrap();
-                                        info!("ix next2 program: {pid_next2}");
-                                    }
-                                }
-                            }
-                            info!(
-                                "slot: {}, blk_ts: {}, ts diff: {ts_diff} tx: {txid}, failed: {failed}",
-                                blk.slot, blk_ts
-                            );
-                        }
-                    }
-                    UpdateOneof::Transaction(tx) => {
-                        let txs = blk_txs.entry(tx.slot).or_default();
-                        txs.push(tx);
-                        // blk_txs.insert(tx.slot, tx);
-                        // let txid = bs58::encode(tx.transaction.unwrap().signature).into_string();
-                        // let ts = blk_ts.get(&tx.slot).copied();
-                        // info!(
-                        //     "transaction at slot: {}, blk_ts: {ts:?}, txid: {txid}",
-                        //     tx.slot
-                        // );
-                    }
-                    UpdateOneof::Ping(_msg) => {
-                        info!("ping received");
-                    }
-                    UpdateOneof::Pong(SubscribeUpdatePong { id }) => {
-                        info!("pong received: id#{id}");
-                    }
-                    msg => anyhow::bail!("received unexpected message: {msg:?}"),
                 }
+            },
+            commitment: Some(CommitmentLevel::Processed as i32),
+            ..Default::default()
+        })
+        .await?;
+
+    let mut timer = interval(Duration::from_secs(3));
+    let mut id = 0;
+    loop {
+        timer.tick().await;
+        id += 1;
+        subscribe_tx
+            .send(SubscribeRequest {
+                ping: Some(SubscribeRequestPing { id }),
+                ..Default::default()
+            })
+            .await?;
+    }
+    #[allow(unreachable_code)]
+    Ok::<(), anyhow::Error>(())
+}
+
+async fn process_response(
+    stream: &mut (impl Stream<Item = Result<SubscribeUpdate, Status>> + Unpin),
+) -> Result<()> {
+    let mut tx_cache: HashMap<u64, Vec<SubscribeUpdateTransaction>> = HashMap::new();
+
+    while let Some(message) = stream.next().await {
+        match message?.update_oneof.expect("valid message") {
+            UpdateOneof::Slot(SubscribeUpdateSlot { slot, .. }) => {
+                info!("slot received: {slot}");
             }
-            Ok::<(), anyhow::Error>(())
+            UpdateOneof::BlockMeta(blk_meta) => {
+                process_blk_meta(blk_meta, &mut tx_cache)?;
+            }
+            UpdateOneof::Block(_blk) => {}
+            UpdateOneof::Transaction(tx) => {
+                process_tx(tx, &mut tx_cache)?;
+            }
+            UpdateOneof::Ping(_msg) => {
+                info!("ping received");
+            }
+            UpdateOneof::Pong(SubscribeUpdatePong { id }) => {
+                info!("pong received: id#{id}");
+            }
+            msg => anyhow::bail!("received unexpected message: {msg:?}"),
         }
-    )?;
+    }
+    Ok::<(), anyhow::Error>(())
+}
+
+fn process_tx(
+    tx_resp: SubscribeUpdateTransaction,
+    tx_cache: &mut HashMap<u64, Vec<SubscribeUpdateTransaction>>,
+) -> Result<()> {
+    let tx_info = tx_resp.transaction.as_ref();
+    let tx = tx_info.and_then(|it| it.transaction.as_ref());
+    let tx_meta = tx_info.and_then(|it| it.meta.as_ref());
+    let tx_msg = tx.and_then(|it| it.message.as_ref());
+
+    if tx_info.is_none() || tx.is_none() || tx_meta.is_none() || tx_msg.is_none() {
+        return Ok(());
+    }
+
+    let tx_info = tx_info.unwrap();
+    let tx = tx.unwrap();
+    let tx_meta = tx_meta.unwrap();
+    let tx_msg = tx_msg.unwrap();
+
+    let txid = bs58::encode(&tx_info.signature).into_string();
+
+    let mut msg_keys: Vec<_> = tx_msg
+        .account_keys
+        .iter()
+        .map(|it| bs58::encode(it).into_string())
+        .collect();
+
+    let mut loaded_keys = vec![];
+    for wk in tx_meta.loaded_writable_addresses.iter() {
+        loaded_keys.push(bs58::encode(wk).into_string())
+    }
+    for rk in tx_meta.loaded_readonly_addresses.iter() {
+        loaded_keys.push(bs58::encode(rk).into_string())
+    }
+
+    msg_keys.extend(loaded_keys.into_iter());
+    let account_len = msg_keys.len();
+    info!(txid, account_len);
+
+    let logs = &tx_meta.log_messages[..];
+    let ixs = &tx_msg.instructions[..];
+
+    for (idx, ix) in ixs.iter().enumerate() {
+        let prog_id = msg_keys.get(ix.program_id_index as usize).unwrap();
+        let is_raydium_amm_prog = prog_id == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+        if is_raydium_amm_prog {
+            info!(?ix.data, "raydium amm program ix data ");
+        }
+        let swap_base_in_id = [9u8];
+        let swap_base_out_id = [11u8];
+        let is_swap =
+            ix.data.starts_with(&swap_base_in_id) || ix.data.starts_with(&swap_base_out_id);
+        if is_raydium_amm_prog && is_swap {
+            let pool = ix
+                .accounts
+                .get(1)
+                .and_then(|acc_idx| msg_keys.get(*acc_idx as usize))
+                .unwrap();
+            info!(pool);
+        }
+    }
+
+    for innerIx in tx_meta.inner_instructions.iter() {
+        // TODO: process inner instruction
+    }
+
+    let txs = tx_cache.entry(tx_resp.slot).or_default();
+    txs.push(tx_resp);
+
+    Ok(())
+}
+
+fn process_blk_meta(
+    blk_meta: SubscribeUpdateBlockMeta,
+    tx_cache: &mut HashMap<u64, Vec<SubscribeUpdateTransaction>>,
+) -> Result<()> {
+    let slot = blk_meta.slot;
+
+    let txs = tx_cache.remove(&slot);
+    if txs.is_none() {
+        return Ok(());
+    }
+
+    let txs = txs.unwrap();
+
+    for tx in txs.iter() {
+        // TODO:change trnasaction timestamp
+    }
+
+    let blk_ts = blk_meta.block_time.map(|it| it.timestamp);
+    let blk_height = blk_meta.block_height.map(|it| it.block_height);
+    let txs = blk_meta.executed_transaction_count;
+    let entries = blk_meta.entries_count;
+    let ts_diff = Utc::now().timestamp() - blk_ts.unwrap_or_default();
+
+    info!(
+        slot,
+        blk_ts, ts_diff, blk_height, txs, entries, "=================> block meta"
+    );
 
     Ok(())
 }
