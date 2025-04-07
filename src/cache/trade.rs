@@ -376,11 +376,21 @@ impl TradeRecord {
 
         let user_source_token_mint = accounts
             .get(1)
-            .and_then(|it| it.post_amt.token.clone())
+            .and_then(|it| {
+                it.pre_amt
+                    .token
+                    .clone()
+                    .or_else(|| it.post_amt.token.clone())
+            })
             .map(|it| it.mint);
         let user_dest_token_mint = accounts
             .get(2)
-            .and_then(|it| it.post_amt.token.clone())
+            .and_then(|it| {
+                it.pre_amt
+                    .token
+                    .clone()
+                    .or_else(|| it.post_amt.token.clone())
+            })
             .map(|it| it.mint);
 
         if user_source_token_mint.is_none() && user_dest_token_mint.is_none() {

@@ -3529,6 +3529,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "maplit",
+ "num-bigint 0.4.6",
  "openssl",
  "redis",
  "reqwest 0.12.12",

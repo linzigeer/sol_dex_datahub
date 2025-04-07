@@ -47,12 +47,13 @@ pub struct ProgramInvocation {
 #[serde(rename_all = "camelCase")]
 pub struct IxAccount {
     pub pubkey: String,
-    pub post_amt: PostAmt,
+    pub pre_amt: Amt,
+    pub post_amt: Amt,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PostAmt {
+pub struct Amt {
     pub sol: u64,
     pub token: Option<TokenAmt>,
 }
@@ -397,7 +398,10 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                                 accounts,
                                 redis_client.clone(),
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| {
+                                anyhow!("parse meteora amm swap in tx {txid} error: {err}")
+                            })?;
                             if let Some(trade) = trade {
                                 mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
