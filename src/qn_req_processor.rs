@@ -264,8 +264,8 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             mints.insert(complete_evt.mint);
                             all_events.push(DexEvent::PumpfunComplete(complete_evt))
                         }
-                        Err(err) => {
-                            warn!("!!!!!!!!!!!!! parse pumpfun log error: {err}, tx: {txid}");
+                        Err(_err) => {
+                            // warn!("!!!!!!!!!!!!! parse pumpfun log error: {err}, tx: {txid}");
                             continue;
                         }
                         _ => continue,
@@ -385,9 +385,6 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             drop(redis_conn);
 
                             if pool_created_record.is_wsol_pool() {
-                                info!(
-                                    "==================> meteora damm create pool: {pool_created_record:#?}"
-                                );
                                 mints.insert(pool_created_record.mint_a);
                                 mints.insert(pool_created_record.mint_b);
                                 all_events.push(DexEvent::PoolCreated(pool_created_record));
@@ -402,13 +399,12 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                             )
                             .await?;
                             if let Some(trade) = trade {
-                                info!("==================> meteora damm trade event: {trade:#?}");
                                 mints.insert(trade.mint);
                                 all_events.push(DexEvent::Trade(trade));
                             }
                         }
-                        Err(err) => {
-                            warn!("!!!!!!!!!!!!! parse meteora damm log error: {err}, tx: {txid}");
+                        Err(_err) => {
+                            // warn!("!!!!!!!!!!!!! parse meteora damm log error: {err}, tx: {txid}");
                             continue;
                         }
                     }
