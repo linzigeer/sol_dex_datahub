@@ -1,10 +1,25 @@
+#![allow(unused)]
 use anyhow::Result;
+use bitvec::order::Msb0;
+use bitvec::view::BitView;
+use borsh::BorshDeserialize;
+use chrono::{DateTime, Utc};
+use futures::StreamExt;
+use meteora_dlmm::*;
 use sol_dex_data_hub::meteora::damm::accounts::MeteoraDammPool;
+use solana_account_decoder_client_types::UiAccountEncoding;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
+use solana_rpc_client_api::filter::{Memcmp, RpcFilterType};
 use solana_sdk::{borsh1, pubkey};
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Registry, fmt::Layer, layer::SubscriberExt};
+
+const DLMM_POSITION_DISCRIMINATOR: [u8; 8] = [117, 176, 212, 199, 245, 180, 133, 182];
+const DLMM_POOL_DISCRIMINATOR: [u8; 8] = [33, 11, 49, 98, 181, 101, 177, 13];
+const DLMM_BIN_ARRAY_DISCRIMINATOR: [u8; 8] = [92, 142, 92, 220, 5, 148, 70, 181];
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,21 +33,72 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let rpc_client = RpcClient::new_with_commitment(
-        "https://omniscient-snowy-sunset.solana-mainnet.quiknode.pro/0a052cfd0f79310032149e1a170e49617f4821b0/".to_string(), CommitmentConfig::confirmed());
+        "https://mainnet.helius-rpc.com/?api-key=6dc55e66-39de-43dd-a297-0c79fda11cf2".to_string(),
+        CommitmentConfig::confirmed(),
+    );
 
     meteora_dlmm::read_dlmm_position_tokens(&rpc_client).await?;
+
+    // stream_flow::read_fees(&rpc_client).await?;
+
+    // // subscribe demo
+    // let owner_key = pubkey!("529tkaVaNkGw4eAG8Xd6TpTyNuzvetQVz8z7q5BqosgW");
+    // let owner_key_bytes = owner_key.to_bytes().to_vec();
+    // let pubsub_client = PubsubClient::new(
+    //     "wss://mainnet.helius-rpc.com/?api-key=6dc55e66-39de-43dd-a297-0c79fda11cf2",
+    // )
+    // .await?;
+    // let pubsub_config = RpcProgramAccountsConfig {
+    //     filters: Some(vec![
+    //         // RpcFilterType::DataSize(10136),
+    //         // RpcFilterType::Memcmp(Memcmp::new_raw_bytes(8 + 32, owner_key_bytes)),
+    //     ]),
+    //     account_config: RpcAccountInfoConfig {
+    //         encoding: Some(UiAccountEncoding::Base64),
+    //         ..Default::default()
+    //     },
+    //     ..Default::default()
+    // };
+    // let (mut data_stream, _unsubscribe) = pubsub_client
+    //     .program_subscribe(&meteora_dlmm::DLMM_PROG, Some(pubsub_config))
+    //     .await?;
+    //
+    // println!("subscribed......");
+    // while let Some(resp) = data_stream.next().await {
+    //     let data = resp.value.account.data.decode().unwrap();
+    //     if data.starts_with(&DLMM_POOL_DISCRIMINATOR) {
+    //         let lb_pair = LbPair::try_from_slice(&data[8..]).unwrap();
+    //         let ts = DateTime::from_timestamp(lb_pair.last_updated_at, 0).unwrap();
+    //         println!("pool {} changed at {}", resp.value.pubkey, ts);
+    //     } else if data.starts_with(&DLMM_POSITION_DISCRIMINATOR) {
+    //         let pos_v2 = PositionV2::try_from_slice(&data[8..]).unwrap();
+    //         let ts = DateTime::from_timestamp(pos_v2.last_updated_at, 0).unwrap();
+    //         println!(
+    //             "position {} of pool {} changed at {}",
+    //             resp.value.pubkey, pos_v2.lb_pair, ts
+    //         );
+    //     } else if data.starts_with(&DLMM_BIN_ARRAY_DISCRIMINATOR) {
+    //         // let bin_array = BinArray::try_from_slice(&data[8..]).unwrap();
+    //         // println!(
+    //         //     "bin array {} index [{}] of pool {} changed....",
+    //         //     resp.value.pubkey, bin_array.index, bin_array.lb_pair
+    //         // );
+    //     } else {
+    //         // println!("not recognized account: {}", resp.value.pubkey);
+    //     }
+    // }
 
     Ok(())
 }
 
 mod meteora_dlmm {
 
-    use std::collections::HashSet;
+    use std::collections::HashMap;
 
     use super::*;
     use borsh::BorshDeserialize;
     use itertools::Itertools;
-    use num_bigint::{BigInt, BigUint};
+    use num_bigint::BigUint;
 
     #[derive(Clone, Debug, BorshDeserialize, PartialEq, Copy)]
     pub struct StaticParameters {
@@ -170,78 +236,104 @@ mod meteora_dlmm {
     }
 
     const MAX_BIN_PER_ARRAY: i64 = 70;
+    pub const DLMM_PROG: Pubkey = pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
+
     pub async fn read_dlmm_position_tokens(rpc_client: &RpcClient) -> Result<()> {
-        let lb_pair = pubkey!("6WTbcDmtqDNwxxLe9YzHzpSSBKQ7AduZG7SmYWpRwjZZ");
-        let position = pubkey!("8Zhc5rkShtuzc5YKQZiKCfFdr2cicSNxuyDqm6vwK4dN");
-        // let position = pubkey!("GMEgkBPgasHcopyWhrPg5AB3fwYt4zAmvieErftPGQKy");
+        let lb_pair = pubkey!("5yG7rhsoWyiCvhUXAS1t9fFtxEZWBxKDJGwYfePBe7AQ");
+        let position = pubkey!("8ihGXcMr6NwWoPc1bDQMCsYpNdh3tf48biXBB68Top2X");
 
         let lb_pair_bytes = rpc_client.get_account_data(&lb_pair).await?;
         let lb_pair_data: LbPair = borsh1::try_from_slice_unchecked(&lb_pair_bytes[8..])?;
-        info!(
-            "{lb_pair} active id is: {}, x_mint: {}, y_mint: {}",
-            lb_pair_data.active_id, lb_pair_data.token_x_mint, lb_pair_data.token_y_mint
+        println!(
+            "{lb_pair} active id is: {}, x_mint: {}, y_mint: {}, bin step is: {}",
+            lb_pair_data.active_id,
+            lb_pair_data.token_x_mint,
+            lb_pair_data.token_y_mint,
+            lb_pair_data.bin_step
         );
-        let _base_decimals = 6;
-        let _quote_decimals = 9;
 
         let position_bytes = rpc_client.get_account_data(&position).await?;
         let position_data: PositionV2 = borsh1::try_from_slice_unchecked(&position_bytes[8..])?;
-        info!(
-            "{position} bin range is: ({}, {}), liquidity_shares: {}",
-            position_data.lower_bin_id,
-            position_data.upper_bin_id,
-            position_data.liquidity_shares.len()
+        println!(
+            "position {position} bin range is: ({}, {})",
+            position_data.lower_bin_id, position_data.upper_bin_id,
         );
 
-        let position_bin_array_keys: Vec<_> = (position_data.lower_bin_id
-            ..=position_data.upper_bin_id)
-            .map(|id| {
-                let idx = bin_id_to_bin_array_idx(id as i64);
-                derive_bin_array(lb_pair, idx)
-            })
+        let pos_lower_bin_id = position_data.lower_bin_id as i64;
+        let pos_upper_bin_id = position_data.upper_bin_id as i64;
+        let pos_share = position_data.liquidity_shares;
+
+        let pos_lower_bin_array_idx = bin_id_to_bin_array_idx(pos_lower_bin_id);
+        let pos_upper_bin_array_idx = bin_id_to_bin_array_idx(pos_upper_bin_id);
+        println!(
+            "position lower bin idx: {}, upper_bin_idx: {}",
+            pos_lower_bin_array_idx, pos_upper_bin_array_idx
+        );
+
+        let position_bin_array_keys: Vec<_> = (pos_lower_bin_array_idx..=pos_upper_bin_array_idx)
+            .map(|bin_array_idx| derive_bin_array(lb_pair, bin_array_idx))
             .unique()
             .collect();
-        println!("bin_array accounts: {position_bin_array_keys:#?}");
+        println!("position bin_array accounts: {position_bin_array_keys:#?}");
 
         let position_bin_array_accounts = rpc_client
             .get_multiple_accounts(&position_bin_array_keys)
             .await?;
 
-        let mut position_bin_arrays = vec![];
-        for ba_acc in position_bin_array_accounts {
-            let ba: BinArray = borsh1::try_from_slice_unchecked(&ba_acc.unwrap().data)?;
-            position_bin_arrays.push(ba);
+        let mut position_bin_arrays_map = HashMap::new();
+        for (idx, ba_acc) in position_bin_array_accounts.into_iter().enumerate() {
+            let bin_array_pubkey = position_bin_array_keys[idx];
+            let ba: BinArray = borsh1::try_from_slice_unchecked(&ba_acc.unwrap().data[8..])?;
+            position_bin_arrays_map.insert(bin_array_pubkey, ba);
         }
 
         let mut amount_x = 0u64;
         let mut amount_y = 0u64;
+        let mut pos_share_idx = 0;
+        for pos_bin_array_idx in pos_lower_bin_array_idx..=pos_upper_bin_array_idx {
+            let bin_array_lower_bin_id = pos_bin_array_idx * MAX_BIN_PER_ARRAY;
+            let bin_array_upper_bin_id = bin_array_lower_bin_id + MAX_BIN_PER_ARRAY - 1;
 
-        for pba in position_bin_arrays {
-            for (idx, bin) in pba.bins.iter().enumerate() {
-                let pos_share = position_data.liquidity_shares[idx];
+            let bin_array_key = derive_bin_array(lb_pair, pos_bin_array_idx);
+            println!(
+                "bin array {} bin id range is: ({}, {})",
+                bin_array_key, bin_array_lower_bin_id, bin_array_upper_bin_id
+            );
 
-                let x_amount = BigUint::from(pos_share) * BigUint::from(bin.amount_x)
-                    / BigUint::from(bin.liquidity_supply);
-                let y_amount = BigUint::from(pos_share) * BigUint::from(bin.amount_y)
-                    / BigUint::from(bin.liquidity_supply);
+            let bin_array = position_bin_arrays_map.get(&bin_array_key);
+            if bin_array.is_none() {
+                continue;
+            }
+            let bin_array = bin_array.unwrap();
+            for bin_idx in 0..MAX_BIN_PER_ARRAY {
+                let bin_id = bin_array_lower_bin_id + bin_idx;
+                if bin_id >= pos_lower_bin_id && bin_id <= pos_upper_bin_id {
+                    let bin = bin_array.bins[bin_idx as usize];
+                    // println!("{bin_id}: {:#?}", bin);
+                    let liq_share = pos_share[pos_share_idx];
+                    pos_share_idx += 1;
+                    let amount_x_in_bin = BigUint::from(bin.amount_x) * BigUint::from(liq_share)
+                        / BigUint::from(bin.liquidity_supply);
+                    let amount_y_in_bin = BigUint::from(bin.amount_y) * BigUint::from(liq_share)
+                        / BigUint::from(bin.liquidity_supply);
 
-                amount_x += u64::try_from(x_amount)?;
-                amount_y += u64::try_from(y_amount)?;
+                    amount_x += u64::try_from(amount_x_in_bin)?;
+                    amount_y += u64::try_from(amount_y_in_bin)?;
+                }
             }
         }
 
-        println!("amount_x: {amount_x}, amount_y: {amount_y}");
+        println!("amount x: {amount_x}, amount y: {amount_y}");
 
         Ok(())
     }
 
-    pub fn derive_bin_array(lb_pair: Pubkey, idx: i64) -> Pubkey {
-        let dlmm_prog = pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
-        let bin_array_idx_bytes = idx.to_le_bytes();
+    pub fn derive_bin_array(lb_pair: Pubkey, bin_array_idx: i64) -> Pubkey {
+        let bin_array_idx_bytes = bin_array_idx.to_le_bytes();
 
         let (derive_pda, _) = Pubkey::find_program_address(
             &[b"bin_array", &lb_pair.to_bytes(), &bin_array_idx_bytes],
-            &dlmm_prog,
+            &DLMM_PROG,
         );
         derive_pda
     }
