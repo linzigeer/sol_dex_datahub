@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc, serde::ts_seconds};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use tracing::warn;
 
 use crate::{
     cache::{DexPoolRecord, RedisCacheRecord},
@@ -104,10 +105,14 @@ impl TradeRecord {
                 )
             };
 
-        let trader = log.user;
-        let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
+
+        let trader = log.user;
+        let mint = cached_pool.token_mint();
 
         Ok(Some(Self {
             blk_ts,
@@ -189,10 +194,14 @@ impl TradeRecord {
                 )
             };
 
-        let trader = log.user;
-        let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
+
+        let trader = log.user;
+        let mint = cached_pool.token_mint();
 
         Ok(Some(Self {
             blk_ts,
@@ -294,8 +303,12 @@ impl TradeRecord {
         }
 
         let mint = cached_pool.token_mint();
+
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
 
         let (pool_token_amt, pool_sol_amt) = if is_token_x_sol {
             (pool_token_y_amt.amt, pool_token_x_amt.amt)
@@ -394,9 +407,10 @@ impl TradeRecord {
             .map(|it| it.mint);
 
         if user_source_token_mint.is_none() && user_dest_token_mint.is_none() {
-            anyhow::bail!(
-                "meteora damm swap have no user source and destination token balance change"
+            warn!(
+                "meteora damm swap have no user source and destination token balance change, txid: {txid}"
             );
+            return Ok(None);
         }
 
         let is_buy = if let Some(user_source_token_mint) = user_source_token_mint {
@@ -416,6 +430,9 @@ impl TradeRecord {
         let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
 
         let is_token_a_sol = pool_token_a_amt.mint == WSOL_MINT.to_string();
         let (pool_token_amt, pool_sol_amt) = if is_token_a_sol {
@@ -538,6 +555,9 @@ impl TradeRecord {
         let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
 
         let (pool_token_amt, pool_sol_amt) = if is_coin_token_sol {
             (pc_token_amt.amt, coin_token_amt.amt)
@@ -659,6 +679,9 @@ impl TradeRecord {
         let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
 
         let (pool_token_amt, pool_sol_amt) = if is_coin_token_sol {
             (pc_token_amt.amt, coin_token_amt.amt)
@@ -729,6 +752,9 @@ impl TradeRecord {
         let mint = cached_pool.token_mint();
         let decimals = cached_pool.token_decimals();
         let price_sol = utils::calc_price_sol(sol_amt, token_amt, decimals);
+        if !price_sol.is_normal() {
+            return Ok(None);
+        }
 
         Ok(Some(Self {
             blk_ts,
