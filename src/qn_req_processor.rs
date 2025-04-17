@@ -144,8 +144,17 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
             let txid = tx.signature;
             let blk_ts = DateTime::from_timestamp(tx.blk_ts, 0)
                 .ok_or_else(|| anyhow!("block timestamp error in quicknode stream"))?;
+            let ixs: Vec<_> = tx
+                .ixs
+                .iter()
+                .filter(|it| {
+                    // exclude meteroal dlmm initBinArray Instruction
+                    !(it.program_id == METEORA_DLMM_PROGRAM_ID.to_string()
+                        && it.instruction.data.starts_with("5N5iEh8c"))
+                })
+                .collect();
             for (idx, log) in tx.logs.into_iter().enumerate() {
-                let invocation = tx.ixs.get(idx);
+                let invocation = ixs.get(idx);
                 if invocation.is_none() {
                     continue;
                 }

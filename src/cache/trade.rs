@@ -240,7 +240,8 @@ impl TradeRecord {
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
             DexPoolRecord::from_meteora_swap_accounts(lb_pair_pubkey, accounts, &mut redis_conn)
-                .await?;
+                .await
+                .map_err(|err| anyhow!("error while parse pool from tx {txid}: {err}"))?;
         cached_pool
             .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
             .await?;
@@ -260,7 +261,7 @@ impl TradeRecord {
             .ok_or_else(|| anyhow!("need token x value in meteora dlmm swap log"))?;
         let pool_token_x_amt = token_x_vault.post_amt.token.clone().ok_or_else(|| {
             anyhow!(
-                "meteora dlmm token x vault {} should have balance",
+                "meteora dlmm token x vault {} should have balance, txid: {txid}",
                 token_x_vault.pubkey
             )
         })?;
