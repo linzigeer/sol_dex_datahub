@@ -10,12 +10,12 @@ use tracing_subscriber::EnvFilter;
 use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient};
 use yellowstone_grpc_proto::{
     geyser::{
-        CommitmentLevel, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
-        SubscribeUpdateBlockMeta, SubscribeUpdatePong, SubscribeUpdateSlot,
+        CommitmentLevel, SubscribeRequest, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+        SubscribeUpdate, SubscribeUpdateBlockMeta, SubscribeUpdatePong, SubscribeUpdateSlot,
         SubscribeUpdateTransaction, subscribe_update::UpdateOneof,
     },
-    tonic::Status,
+    tonic::{Status, codec::CompressionEncoding},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = GeyserGrpcClient::build_from_shared(args.endpoint)?
         .x_token(args.x_token)?
+        .accept_compressed(CompressionEncoding::Zstd)
         .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
@@ -70,18 +71,27 @@ async fn send_request(
 
     subscribe_tx
         .send(SubscribeRequest {
-            blocks_meta: maplit::hashmap! {
-                "".to_owned() => SubscribeRequestFilterBlocksMeta {},
+            // blocks_meta: maplit::hashmap! {
+            //     "".to_owned() => SubscribeRequestFilterBlocksMeta {},
+            // },
+            blocks: maplit::hashmap! {
+                "".to_owned() => SubscribeRequestFilterBlocks{
+                    account_include: programs.clone(),
+                    include_transactions: Some(true),
+                    include_accounts: Some(false),
+                    include_entries: Some(false),
+                },
             },
-            transactions: maplit::hashmap! {
-                "".to_owned() => SubscribeRequestFilterTransactions {
-                    vote: Some(false),
-                    failed: Some(false),
-                    account_include:programs.clone(),
-                    ..Default::default()
-                }
-            },
-            commitment: Some(CommitmentLevel::Processed as i32),
+            // transactions: maplit::hashmap! {
+            //     "".to_owned() => SubscribeRequestFilterTransactions {
+            //         vote: Some(false),
+            //         failed: Some(false),
+            //         account_include:programs.clone(),
+            //         ..Default::default()
+            //     }
+            // },
+            commitment: Some(CommitmentLevel::Confirmed as i32),
+            from_slot: None,
             ..Default::default()
         })
         .await?;
@@ -115,7 +125,20 @@ async fn process_response(
             UpdateOneof::BlockMeta(blk_meta) => {
                 process_blk_meta(blk_meta, &mut tx_cache)?;
             }
-            UpdateOneof::Block(_blk) => {}
+            UpdateOneof::Block(blk) => {
+                let txs = blk.transactions.len();
+                let slot = blk.slot;
+                let blk_hash = blk.blockhash;
+                info!(
+                    "=========================================> blk: {blk_hash}, slot: {slot}, txs: {txs}"
+                );
+                let tx_ids: Vec<_> = blk
+                    .transactions
+                    .iter()
+                    .map(|it| bs58::encode(&it.signature).into_string())
+                    .collect();
+                info!("txids: {tx_ids:#?}");
+            }
             UpdateOneof::Transaction(tx) => {
                 process_tx(tx, &mut tx_cache)?;
             }
