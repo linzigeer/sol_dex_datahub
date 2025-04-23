@@ -478,7 +478,7 @@ impl TradeRecord {
         let amm_pubkey = Pubkey::from_str(&pool_acc.pubkey)?;
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
-            DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
+            DexPoolRecord::from_raydium_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
                 .await?;
         cached_pool
             .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)
@@ -602,7 +602,7 @@ impl TradeRecord {
         let amm_pubkey = Pubkey::from_str(&pool_acc.pubkey)?;
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cached_pool =
-            DexPoolRecord::from_raydim_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
+            DexPoolRecord::from_raydium_amm_trade_accounts(amm_pubkey, accounts, &mut redis_conn)
                 .await?;
         cached_pool
             .save_ex(&mut redis_conn, DEX_POOL_RECORD_EXP_SECS)

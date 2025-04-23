@@ -148,7 +148,7 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
                 .ixs
                 .iter()
                 .filter(|it| {
-                    // exclude meteroal dlmm initBinArray Instruction
+                    // exclude meteora dlmm initBinArray Instruction
                     !(it.program_id == METEORA_DLMM_PROGRAM_ID.to_string()
                         && it.instruction.data.starts_with("5N5iEh8c"))
                 })

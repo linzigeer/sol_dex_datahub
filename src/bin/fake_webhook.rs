@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let listen_on = "0.0.0.0:9999";
     let listener = TcpListener::bind(listen_on).await?;
 
-    info!("fake webhhok server started, listen on: {}", listen_on);
+    info!("fake webhook server started, listen on: {}", listen_on);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -52,7 +52,7 @@ pub async fn webhook(req_body: String) -> Result<(), String> {
     // let file_name = format!("{}.json", Utc::now().timestamp_millis());
     // fs::write(file_name, req_body).await.unwrap();
     let elapsed = start.elapsed().as_millis();
-    info!("process webook take {elapsed} ms");
+    info!("process webhook take {elapsed} ms");
 
     Ok(())
 }

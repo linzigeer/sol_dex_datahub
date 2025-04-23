@@ -175,7 +175,7 @@ impl DexPoolCreatedRecord {
         let x_vault_acc = accounts.get(4).ok_or_else(|| {
             anyhow!("need x vault in meteora dlmm create lb pair instruction accounts")
         })?;
-        let x_valut_token_amt = x_vault_acc
+        let x_vault_token_amt = x_vault_acc
             .post_amt
             .token
             .clone()
@@ -184,7 +184,7 @@ impl DexPoolCreatedRecord {
         let y_vault_acc = accounts.get(5).ok_or_else(|| {
             anyhow!("need y vault in meteora dlmm create lb pair instruction accounts")
         })?;
-        let y_valut_token_amt = y_vault_acc
+        let y_vault_token_amt = y_vault_acc
             .post_amt
             .token
             .clone()
@@ -205,8 +205,8 @@ impl DexPoolCreatedRecord {
             dex: Dex::MeteoraDlmm,
             mint_a: token_x,
             mint_b: token_y,
-            decimals_a: x_valut_token_amt.decimals,
-            decimals_b: y_valut_token_amt.decimals,
+            decimals_a: x_vault_token_amt.decimals,
+            decimals_b: y_vault_token_amt.decimals,
         })
     }
 
@@ -237,7 +237,7 @@ impl DexPoolCreatedRecord {
         let a_vault_acc = accounts.get(token_vault_a_idx).ok_or_else(|| {
             anyhow!("need a token vault in meteora damm create pool instruction accounts")
         })?;
-        let a_valut_token_amt = a_vault_acc
+        let a_vault_token_amt = a_vault_acc
             .post_amt
             .token
             .clone()
@@ -246,7 +246,7 @@ impl DexPoolCreatedRecord {
         let b_vault_acc = accounts.get(token_vault_b_idx).ok_or_else(|| {
             anyhow!("need b token vault in meteora damm create pool instruction accounts")
         })?;
-        let b_valut_token_amt = b_vault_acc
+        let b_vault_token_amt = b_vault_acc
             .post_amt
             .token
             .clone()
@@ -268,8 +268,8 @@ impl DexPoolCreatedRecord {
             dex: Dex::MeteoraDamm,
             mint_a: token_a_mint,
             mint_b: token_b_mint,
-            decimals_a: a_valut_token_amt.decimals,
-            decimals_b: b_valut_token_amt.decimals,
+            decimals_a: a_vault_token_amt.decimals,
+            decimals_b: b_vault_token_amt.decimals,
         })
     }
 }
@@ -436,7 +436,7 @@ impl DexPoolRecord {
         Ok(cached_pool.unwrap())
     }
 
-    pub async fn from_raydim_amm_trade_accounts(
+    pub async fn from_raydium_amm_trade_accounts(
         amm_pubkey: Pubkey,
         accounts: &[IxAccount],
         redis_conn: &mut MultiplexedConnection,

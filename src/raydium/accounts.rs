@@ -45,7 +45,7 @@ pub struct StateData {
     pub pool_open_time: u64,
     /// padding for future updates
     pub padding: [u64; 2],
-    /// switch from orderbookonly to init
+    /// switch from order book only to init
     pub orderbook_to_init_time: u64,
 
     /// swap coin in amount

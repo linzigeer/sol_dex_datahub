@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     });
 
     let redis_client = context.redis_client.clone();
-    let webhook_endpoint = config.webhook_enpoint.clone();
+    let webhook_endpoint = config.webhook_endpoint.clone();
     let http_client = Arc::new(
         reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_millis(200))
