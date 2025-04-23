@@ -1,4 +1,4 @@
 /target
 *_dev.json
 *.webhook.json
-/bin/*_test.rs
+/src/bin/*_test.rs
