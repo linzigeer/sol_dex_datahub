@@ -2,3 +2,4 @@
 *_dev.json
 *.webhook.json
 /src/bin/*_test.rs
+.idea

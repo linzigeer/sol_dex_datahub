@@ -179,7 +179,7 @@ impl DexPoolCreatedRecord {
             .post_amt
             .token
             .clone()
-            .ok_or_else(|| anyhow!("meteora dlmm x valult should have token amt"))?;
+            .ok_or_else(|| anyhow!("meteora dlmm x vault should have token amt"))?;
 
         let y_vault_acc = accounts.get(5).ok_or_else(|| {
             anyhow!("need y vault in meteora dlmm create lb pair instruction accounts")
@@ -188,7 +188,7 @@ impl DexPoolCreatedRecord {
             .post_amt
             .token
             .clone()
-            .ok_or_else(|| anyhow!("meteora dlmm y valult should have token amt"))?;
+            .ok_or_else(|| anyhow!("meteora dlmm y vault should have token amt"))?;
 
         let creator_acc = accounts.get(8).ok_or_else(|| {
             anyhow!("need pool creator in meteora dlmm create lb pair instruction accounts")

@@ -73,7 +73,7 @@ mod tests {
         // let encoded_evt = "UWzjvs3QCsT04gtUAgAAABZs3AEAAAAAAC0xAQAAAABAS0wAAAAAAAAAAAAAAAAA";
         let encoded_evt = "UWzjvs3QCsSuVepPAAAAAPbFLwAAAAAArKqjAAAAAACr6igAAAAAAAAAAAAAAAAA";
         let evt_bytes = BASE64_STANDARD.decode(encoded_evt).unwrap();
-        println!("swap descriminator: {:?}", &evt_bytes[..8]);
+        println!("swap discriminator: {:?}", &evt_bytes[..8]);
 
         let swap_evt = MeteoraDammEvents::from_log(encoded_evt).unwrap();
         println!("swap evt: {swap_evt:#?}");
@@ -82,7 +82,7 @@ mod tests {
     pub fn test_decode_create_pool_evt() {
         let encoded_evt = "yiwpWGjcnVL/OEim1tJaIYv+uaPx+ExHNdLj9kYFNHhSYEHp3UqzpOXozgM2rUsMJx7iRsc7tS5W0xZVIVrmfBDwo4cZ855TBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEBsLGkRP0LBqwdp+4Q412IQMSZjqfRwFJ5w7XpeoA2jvI=";
         let evt_bytes = BASE64_STANDARD.decode(encoded_evt).unwrap();
-        println!("pool created descriminator: {:?}", &evt_bytes[..8]);
+        println!("pool created discriminator: {:?}", &evt_bytes[..8]);
 
         let created_evt = MeteoraDammEvents::from_log(encoded_evt).unwrap();
         println!("pool created evt: {created_evt:#?}");

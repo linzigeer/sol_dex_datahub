@@ -1,9 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, bail};
 use redis::aio::MultiplexedConnection;
 use tracing::warn;
 
 const QN_REQ_LIST_KEY: &str = "list:qn_requests";
-const MAX_QN_REQ_LEN: u64 = 50;
+pub const MAX_QN_REQ_LEN: u64 = 50;
 pub async fn rpush_qn_request(conn: &mut MultiplexedConnection, req: String) -> Result<()> {
     let q_len: u64 = redis::cmd("llen")
         .arg(QN_REQ_LIST_KEY)
@@ -11,7 +11,7 @@ pub async fn rpush_qn_request(conn: &mut MultiplexedConnection, req: String) -> 
         .await?;
     if q_len >= MAX_QN_REQ_LEN {
         warn!("qn request queue larger than {MAX_QN_REQ_LEN}");
-        return Err(anyhow!("qn request queue larger than {MAX_QN_REQ_LEN}"));
+        bail!("qn request queue larger than {MAX_QN_REQ_LEN}");
     }
 
     // redis rpush

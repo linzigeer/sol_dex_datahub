@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         loop {
             let redis_client = redis_client.clone();
             match qn_req_processor::start(redis_client).await {
-                Ok(_) => info!("qn request processor successed"),
+                Ok(_) => info!("qn request processor succeeded"),
                 Err(err) => error!("qn reqwest processor error: {err}"),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
             .timeout(Duration::from_secs(1))
             .build()?,
     );
+
     tokio::spawn(async move {
         loop {
             let redis_client = redis_client.clone();
@@ -67,7 +68,7 @@ async fn main() -> Result<()> {
                 endpoint: webhook_endpoint.clone(),
             };
             match webhook.start().await {
-                Ok(_) => info!("webhook processor successed"),
+                Ok(_) => info!("webhook processor succeeded"),
                 Err(err) => error!("webhook processor error: {err}"),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

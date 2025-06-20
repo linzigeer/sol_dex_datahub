@@ -4,9 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{ Result, anyhow};
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
+use itertools::{Itertools};
 use serde::Deserialize;
 use serde_with::{DisplayFromStr, serde_as};
 use tracing::{info, warn};
@@ -133,9 +134,12 @@ pub async fn start(redis_client: Arc<redis::Client>) -> Result<()> {
 
         let max_blk_ts = txs.iter().map(|it| it.blk_ts).max().unwrap_or_default();
         let time_diff = Utc::now().timestamp() - max_blk_ts;
-        let slots: Vec<_> = txs.iter().map(|it| it.slot).collect();
-        let min_slot = slots.iter().min().copied().unwrap_or_default();
-        let max_slot = slots.iter().max().copied().unwrap_or_default();
+        let (min_slot, max_slot) = txs
+            .iter()
+            .map(|it| it.slot)
+            .minmax()
+            .into_option()
+            .expect("find min_slot and max_slot error");
         let mut all_events = vec![];
         let mut mints = HashSet::new();
 

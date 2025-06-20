@@ -76,15 +76,16 @@ pub async fn ltrim_dex_evts(conn: &mut MultiplexedConnection, len: usize) -> Res
 
 #[cfg(test)]
 mod test {
-    use chrono::Utc;
-    use solana_sdk::pubkey::Pubkey;
-
     use crate::{
         cache::DexPoolCreatedRecord,
         common::{Dex, WSOL_MINT},
         pumpfun::PUMPFUN_PROGRAM_ID,
         raydium::RAYDIUM_AMM_PROGRAM_ID,
     };
+    use chrono::Utc;
+    use solana_sdk::pubkey::Pubkey;
+    use std::any::type_name_of_val;
+    use std::collections::HashMap;
 
     use super::{DexEvent, TradeRecord};
 
@@ -130,5 +131,81 @@ mod test {
             v.get("kind").and_then(|it| it.as_str()),
             Some("PoolCreated")
         );
+
+        let (a, b) = ("a", 4);
+        let (mut to_be, max_int, z) = (false, 1 << 30, "a");
+        to_be = true;
+        let name_of_val = type_name_of_val(&to_be);
+        println!("{}", name_of_val);
+        println!("{}", a);
+        println!("{}", b);
+
+        for i in 0..10 {
+            println!("{}", i);
+        }
+    }
+
+    ///牛顿法求平方根
+    #[test]
+    pub fn find_sqr_of_42() {
+        let x = 42f64;
+        let mut z = x as f64 / 2.0;
+        let mut counter = 0;
+
+        let now = std::time::Instant::now();
+        while z * z - x > 0.00000001 {
+            counter += 1;
+            if z * z > x {
+                z -= 0.00000001f64;
+            } else {
+                z += 0.00000001f64;
+            }
+        }
+        println!("time elapsed: {:?}", now.elapsed());
+        println!("counter: {}", counter);
+        println!("z: {}", z);
+    }
+
+    #[test]
+    fn test_slice() {
+        let v = vec![2, 3, 5, 7, 11, 13];
+        let mut s = &v[..];
+        println!("slice1: {:?}", s);
+        s = &s[..4];
+        println!("slice2: {:?}", s);
+        s = &s[2..];
+        println!("slice3: {:?}", s);
+
+        let mut map = HashMap::new();
+        map.insert("a", 1);
+        println!("{}", map["a"]); // this will panic if keys doesn't exist
+        println!("{:#?}", map.get("A"));
+
+        let _option = map.remove("a");
+    }
+
+    #[test]
+    fn test_wc() {
+        let s = "hello, this is major tom. hello, major tom, this is your captain speaking.";
+        let mut map = HashMap::new();
+        let _ = s
+            .split(' ')
+            .into_iter()
+            .for_each(|word| *map.entry(word).or_insert(0) += 1);
+
+        println!("map:{:?}", map);
+    }
+
+    pub fn test1(f1: fn(u8, u8)->u8) -> u8 {
+        f1(1, 2)
+    }
+
+    #[test]
+    fn test_fn() {
+
     }
 }
+
+
+
+

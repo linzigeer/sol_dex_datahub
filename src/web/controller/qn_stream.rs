@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{cmp::min, time::Instant};
 
 use axum::extract::State;
 use tracing::{debug, info};
@@ -13,11 +13,7 @@ pub async fn sol_dex_stream(
     req_body: String,
 ) -> Result<(), WebAppError> {
     let start = Instant::now();
-    let body_len = req_body.len();
-    let mut body_start_len = 50;
-    if body_len < 50 {
-        body_start_len = body_len;
-    }
+    let body_start_len = min(50, req_body.len());
     let body_start = &req_body[0..body_start_len];
     debug!("request body is start with: {}", body_start);
     if body_start.contains("metadata") {
